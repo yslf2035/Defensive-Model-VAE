@@ -55,7 +55,7 @@ def draw_vehicle_rectangle(ax, x, y, heading, length=4, width=2, color=[0, 0.447
     
     # 创建矩形补丁（无边框）
     rectangle = patches.Polygon(rotated_corners, closed=True, 
-                               facecolor=color, edgecolor=None, linewidth=0)
+                                facecolor=color, edgecolor=None, linewidth=0)
     ax.add_patch(rectangle)
     
     return rectangle
@@ -109,7 +109,7 @@ def draw_background_vehicle(ax, x=58, y=-3, length=4, width=2, color=[0.466, 0.6
     
     # 创建矩形补丁（无边框）
     rectangle = patches.Polygon(rotated_corners, closed=True, 
-                               facecolor=color, edgecolor=None, linewidth=0)
+                                facecolor=color, edgecolor=None, linewidth=0)
     ax.add_patch(rectangle)
 
 

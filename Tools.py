@@ -5,9 +5,648 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.animation import FuncAnimation
+import os
 from tqdm import tqdm
 import pandas as pd
 from scipy.interpolate import CubicSpline, make_interp_spline
+from Training_VAE import ConditionalTrajectoryVAE
+
+
+# 调用模型生成轨迹
+def load_model_and_generate_trajectory(model_path, start_x, start_y, seq_len=12, dim=3, latent_dim=8, device='cpu'):
+    """
+    加载模型并生成轨迹
+
+    Args:
+        model_path: 模型文件路径
+        start_x: 起始点x坐标
+        start_y: 起始点y坐标
+        seq_len: 轨迹长度
+        dim: 每个点的维度
+        latent_dim: 潜在空间维度
+        device: 计算设备
+
+    Returns:
+        generated_trajectory: 生成的轨迹数据 (seq_len, 3) - [时间, x, y]
+    """
+    # 加载模型
+    model = ConditionalTrajectoryVAE(seq_len, dim, latent_dim).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+
+    # 生成轨迹
+    with torch.no_grad():
+        # 从潜在空间采样随机向量
+        z = torch.randn(1, latent_dim).to(device)
+
+        # 创建起点条件
+        start_points = np.array([start_x, start_y], ndmin=2)
+        if isinstance(start_points, np.ndarray):
+            start_points = torch.from_numpy(start_points).float()
+        condition = start_points
+        condition = condition.to(next(model.parameters()).device)
+        # 编码条件信息
+        h_condition = model.condition_encoder(condition)
+
+        # 生成轨迹
+        generated_trajectory = model.decode(z, h_condition).cpu().numpy()[0]  # (seq_len, 3)
+
+    return generated_trajectory
+
+
+# 从csv文件中获取起始条件
+def get_start_conditions_from_csv(csv_path, model_name):
+    """
+    从csv文件中获取起始条件
+
+    Args:
+        csv_path: csv文件路径
+        model_name: 模型名称
+
+    Returns:
+        start_x, start_y, start_angle: 起始x坐标、y坐标、角度（弧度）
+    """
+    try:
+        # 读取csv文件
+        df = pd.read_csv(csv_path)
+
+        if "sce1" in model_name:
+            # sce1场景：ego_y >= 40
+            mask = (df['ego_y'] >= 40)
+        elif "sce2" in model_name:
+            # sce2场景：sv1_yaw < -170
+            mask = (df['sv1_yaw'] < -170)
+        elif "sce4" in model_name:
+            # sce4场景：sv1_x < 9 且 sv1_yaw > -89
+            mask = (df['sv1_x'] < 9) & (df['sv1_yaw'] > -89)
+        else:
+            # sce3场景：sv1_vx != 0, sv1_vy != 0, ego_y <= 40, ego_y != 0
+            mask = (
+                    (df['sv1_vx'] != 0) &
+                    (df['sv1_vy'] != 0) &
+                    (df['ego_y'] <= 40) &
+                    (df['ego_y'] != 0)
+            )
+
+        if not mask.any():
+            print(f"警告：未找到满足条件的起始行，使用默认值")
+            if "sce1" in model_name:
+                return -193.3, 50.0, -90 * math.pi / 180
+            elif "sce2" in model_name:
+                return -155.0, -5.0, -90 * math.pi / 180
+            elif "sce4" in model_name:
+                return 11.0, 0.0, -90 * math.pi / 180
+            else:
+                return 155.0, -15.0, -90 * math.pi / 180
+
+        # 获取第一行满足条件的数据
+        start_row = df[mask].iloc[0]
+
+        start_x = start_row['ego_x']
+        start_y = start_row['ego_y']
+        start_angle = start_row['ego_yaw'] * math.pi / 180
+        start_v = math.sqrt(start_row['ego_vx'] ** 2 + start_row['ego_vy'] ** 2)
+
+        print(f"从CSV获取起始条件：x={start_x:.2f}, y={start_y:.2f}, angle={start_angle:.2f}rad, v={start_v:.2f}")
+
+        return start_x, start_y, start_angle, start_v
+
+    except Exception as e:
+        print(f"读取CSV文件失败：{e}")
+        print("使用默认起始条件")
+        if "sce1" in model_name:
+            return -193.3, 50.0, -90 * math.pi / 180
+        elif "sce2" in model_name:
+            return -155.0, -5.0, -90 * math.pi / 180
+        elif "sce4" in model_name:
+            return 11.0, 0.0, -90 * math.pi / 180
+        else:
+            return 155.0, -15.0, -90 * math.pi / 180
+
+
+# 从csv中提取人类轨迹和背景车轨迹
+def get_human_and_bv_trajectories(csv_path, model_name):
+    """
+    从csv文件中提取人类轨迹和背景车轨迹
+
+    Args:
+        csv_path: csv文件路径
+        model_name: 模型名称
+
+    Returns:
+        human_traj: 人类轨迹(x,y,t)
+    """
+    try:
+        # 读取csv文件
+        df = pd.read_csv(csv_path)
+        # 定义起点掩码
+        if "sce1" in model_name:
+            # sce1场景：ego_y >= 20
+            start_mask = (df['ego_y'] >= 20)
+            time_step = 0.02
+        elif "sce2" in model_name:
+            # sce2场景：ego_x <= -80
+            start_mask = (df['ego_x'] <= -80)
+            time_step = 0.025
+        elif "sce4" in model_name:
+            # sce4场景：ego_x < 150
+            start_mask = (df['ego_x'] < 150)
+            time_step = 0.02
+        else:
+            # sce3场景：ego_y <= 60, ego_y != 0
+            start_mask = (df['ego_y'] <= 60) & (df['ego_y'] != 0)
+            time_step = 0.015
+        if not start_mask.any():
+            print("警告：未找到满足条件的起始行")
+            return None, None, None
+        start_idx = df[start_mask].index[0]  # 第一个满足start_mask的行索引
+        df_copy = df.iloc[start_idx:]
+        # 定义终点掩码
+        if "sce1" in model_name:
+            end_mask = (df_copy['ego_y'] >= 110)
+        elif "sce2" in model_name:
+            end_mask = (df_copy['ego_x'] < -185)
+        elif "sce4" in model_name:
+            end_mask = (df_copy['sv1_x'] > 15) & (df_copy['sv1_yaw'] < -85)
+        else:
+            end_mask = (df_copy['ego_y'] <= -90)
+        if not end_mask.any():
+            print("警告：未找到满足条件的终止行，使用文件末尾行")
+            end_idx = len(df) - 1
+        else:
+            end_idx = df_copy[end_mask].index[0]  # 第一个满足end_mask的行索引
+        if start_idx >= end_idx:
+            print("警告：终止行在起始行之前或相同")
+            return None, None, None
+
+        # 人类轨迹
+        human_coord = df.loc[start_idx:end_idx, ['ego_x', 'ego_y']].to_numpy()
+        time_column = np.arange(len(human_coord)) * time_step
+        human_traj = np.column_stack((human_coord, time_column))
+        # 背景车轨迹
+        if "sce1" in model_name:
+            bv1_coord = df.loc[start_idx:end_idx, ['sv1_x', 'sv1_y']].to_numpy()
+            bv2_coord = df.loc[start_idx:end_idx, ['sv2_x', 'sv2_y']].to_numpy()
+            bv1_traj = np.column_stack((bv1_coord, time_column))
+            bv2_traj = np.column_stack((bv2_coord, time_column))
+        elif "sce2" in model_name:
+            bv1_coord = df.loc[start_idx:end_idx, ['sv1_x', 'sv1_y']].to_numpy()
+            bv2_coord = df.loc[start_idx:end_idx, ['sv2_x', 'sv2_y']].to_numpy()
+            bv1_traj = np.column_stack((bv1_coord, time_column))
+            bv2_traj = np.column_stack((bv2_coord, time_column))
+        elif "sce4" in model_name:
+            bv1_coord = df.loc[start_idx:end_idx, ['sv1_x', 'sv1_y']].to_numpy()
+            bv2_coord = None
+            bv1_traj = np.column_stack((bv1_coord, time_column))
+            bv2_traj = None
+        else:
+            bv1_coord = df.loc[start_idx:end_idx, ['sv1_x', 'sv1_y']].to_numpy()
+            bv2_coord = df.loc[start_idx:end_idx, ['sv2_x', 'sv2_y']].to_numpy()
+            bv1_traj = np.column_stack((bv1_coord, time_column))
+            bv2_traj = np.column_stack((bv2_coord, time_column))
+
+        return human_traj, bv1_traj, bv2_traj
+    except Exception as e:
+        print(f"读取CSV文件失败：{e}")
+
+
+def process_model_trajectory(human_traj, start_x, start_y, model_states, time_step):
+    """
+        获取模型完整轨迹
+
+        Args:
+            human_traj: 人类轨迹
+            start_x: 模型起点x坐标
+            start_y: 模型起点y坐标
+            model_states: 模型坐标等状态信息
+            time_step: 时间步长
+
+        Returns:
+            model_trajectory: 含时间信息的模型轨迹
+        """
+    model_coord = model_states[:, :2]
+    start_mask = (human_traj[:, 0] == start_x) & (human_traj[:, 1] == start_y)
+    indices = np.where(start_mask)[0]
+    if len(indices) == 0:
+        print("警告：没有找到匹配的行")
+        return None
+    start_index = indices[0]
+    model_effective_time = human_traj[start_index:, 2]
+    coord_rows = model_coord.shape[0]
+    time_rows = model_effective_time.shape[0]
+
+    if time_rows > coord_rows:
+        # model_effective_time行数多于model_coord，截断多余行
+        model_effective_time = model_effective_time[:coord_rows]
+    elif time_rows < coord_rows:
+        # model_effective_time行数少于model_coord，补充缺失行
+        last_time = model_effective_time[-1] if time_rows > 0 else 0
+        additional_rows = coord_rows - time_rows
+        additional_times = np.array([last_time + time_step * (i + 1) for i in range(additional_rows)])
+        model_effective_time = np.concatenate([model_effective_time, additional_times])
+
+    model_trajectory = np.column_stack((model_coord, model_effective_time))
+
+    return model_trajectory
+
+
+
+def create_vehicle_rectangle(center_x, center_y, yaw, length=4.0, width=2.0):
+    """
+    创建车辆矩形
+
+    Args:
+        center_x: 矩形中心x坐标
+        center_y: 矩形中心y坐标
+        yaw: 航向角（弧度）
+        length: 车长（米）
+        width: 车宽（米）
+
+    Returns:
+        rectangle_corners: 矩形四个角的坐标
+    """
+    # 计算矩形的半长和半宽
+    half_length = length / 2
+    half_width = width / 2
+
+    # 定义矩形的四个角（相对于中心点）
+    corners_local = np.array([
+        [-half_length, -half_width],  # 左下
+        [half_length, -half_width],  # 右下
+        [half_length, half_width],  # 右上
+        [-half_length, half_width]  # 左上
+    ])
+
+    # 旋转矩阵
+    cos_yaw = np.cos(yaw)
+    sin_yaw = np.sin(yaw)
+    rotation_matrix = np.array([
+        [cos_yaw, -sin_yaw],
+        [sin_yaw, cos_yaw]
+    ])
+
+    # 旋转矩形角点
+    corners_rotated = np.dot(corners_local, rotation_matrix.T)
+
+    # 平移到中心位置
+    corners_global = corners_rotated + np.array([center_x, center_y])
+
+    return corners_global
+
+
+# 绘制人类轨迹和模型轨迹对比gif
+def plot_gif_human_vs_model(human_traj, bv1_traj, bv2_traj, model_traj, model_name):
+    """
+    绘制gif，人类原始轨迹+模型生成轨迹，潜在风险点前共用轨迹，潜在风险点后分离为两条对比轨迹
+
+    Args:
+        human_traj: 人类轨迹
+        bv1_traj: 背景车1轨迹
+        bv2_traj: 背景车2轨迹
+        model_traj: 模型生成轨迹
+        model_name: 模型名称
+
+    Returns:
+        human_traj: 人类轨迹(x,y,t)
+    """
+    if "sce1" in model_name:
+        # 坐标轴范围
+        xlim = (-230, -150)
+        ylim = (20, 100)
+        time_step = 0.02
+    elif "sce2" in model_name:
+        xlim = (-210, -100)
+        ylim = (-58, 52)
+        time_step = 0.025
+    elif "sce4" in model_name:
+        xlim = (-45, 65)
+        ylim = (-10, 100)
+        time_step = 0.02
+    else:
+        xlim = (80, 230)
+        ylim = (-100, 50)
+        time_step = 0.015
+    # 绘图图窗设置
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.grid(True, alpha=0.2)
+    ax.set_aspect('equal')
+
+    # 绘制车道线
+    if "sce1" in model_name:
+        # sce1场景：三条车道线，x坐标分别为-196.8、-193.3、-189.8，y范围[0,73.2]
+        y_range = np.linspace(0, 73.2, 100)
+        ax.plot([-196.8] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 左侧实线
+        ax.plot([-193.3] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 中间虚线
+        ax.plot([-189.8] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 右侧实线
+    elif "sce2" in model_name:
+        # sce2场景：三条车道线，y坐标分别为-5.8、-2.3、1.2，x范围[-177,-110]
+        x_range = np.linspace(-177, -110, 200)
+        ax.plot(x_range, [-5.8] * len(x_range), 'k-', linewidth=1.5, alpha=0.7)  # 下方实线
+        ax.plot(x_range, [-2.3] * len(x_range), 'k--', linewidth=1.5, alpha=0.7)  # 中间虚线
+        ax.plot(x_range, [1.2] * len(x_range), 'k-', linewidth=1.5, alpha=0.7)  # 上方实线
+    elif "sce4" in model_name:
+        # sce4场景：五条车道线，x坐标分别为4、7.5、11、14.5、18，y范围[-40,120]
+        y_range = np.linspace(-40, 120, 100)
+        ax.plot([4] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 最左边实线
+        ax.plot([7.5] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
+        ax.plot([11] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
+        ax.plot([14.5] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
+        ax.plot([18] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 最右边实线
+    else:
+        # sce3场景：三条车道线
+        y_range = np.linspace(-100, 60, 100)
+        ax.plot([153.3] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)
+        ax.plot([156.8] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)
+        ax.plot([149.7] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)
+
+    model_color = (0, 0.4470, 0.7410)  # 蓝
+    human_color = (0.7961, 0.1255, 0.1765)  # 红
+    bv_color = (0.4660, 0.6740, 0.1880)  # 绿
+
+    # 初始化绘图元素
+    line_trajectory, = ax.plot([], [], color=model_color, linestyle='-', linewidth=2, alpha=1, label='Model')
+    # 初始化车辆矩形
+    vehicle_length = 4.0
+    vehicle_width = 2.0
+    initial_corners = create_vehicle_rectangle(1000, 1000, 0, vehicle_length, vehicle_width)
+    vehicle_rect = patches.Polygon(initial_corners.tolist(), facecolor=model_color, alpha=1, edgecolor='none')
+    ax.add_patch(vehicle_rect)
+
+    # 初始化人类轨迹和车辆
+    human_line = None
+    human_rect = None
+    if human_traj is not None:
+        human_line, = ax.plot([], [], color=human_color, linestyle='-', linewidth=2, alpha=1, label='Human')
+        human_initial_corners = create_vehicle_rectangle(1000, 1000, 0, vehicle_length, vehicle_width)
+        human_rect = patches.Polygon(human_initial_corners.tolist(), facecolor=human_color, alpha=1, edgecolor='none')
+        ax.add_patch(human_rect)
+
+    # 初始化背景车1轨迹和车辆
+    bv1_line = None
+    bv1_rect = None
+    if bv1_traj is not None:
+        bv1_line, = ax.plot([], [], color=bv_color, linewidth=2, alpha=1, label='BV')
+        if "sce3" in model_name:
+            # sce3场景：背景车1为自行车，长2.5m，宽1.5m
+            bv1_initial_corners = create_vehicle_rectangle(1000, 1000, 0, 2.5, 1.5)
+        else:
+            # 其他场景：背景车1为车辆，长4m，宽2m
+            bv1_initial_corners = create_vehicle_rectangle(1000, 1000, 0, 4.0, 2.0)
+        bv1_rect = patches.Polygon(bv1_initial_corners.tolist(), facecolor=bv_color, alpha=1, edgecolor='none')
+        ax.add_patch(bv1_rect)
+
+    # 初始化背景车2轨迹和车辆
+    bv2_line = None
+    bv2_rect = None
+    if bv2_traj is not None:
+        bv2_line, = ax.plot([], [], color=bv_color, linewidth=2, alpha=1, label='BV')
+        if "sce1" in model_name:
+            # sce1场景：背景车2为自行车，长2.5m，宽1.5m
+            bv2_initial_corners = create_vehicle_rectangle(1000, 1000, 0, 2.5, 1.5)
+        else:
+            # 其他场景：背景车2长4m，宽2m
+            bv2_initial_corners = create_vehicle_rectangle(1000, 1000, 0, 4.0, 2.0)
+        bv2_rect = patches.Polygon(bv2_initial_corners.tolist(), facecolor=bv_color, alpha=1, edgecolor='none')
+        ax.add_patch(bv2_rect)
+
+    # 时间文本
+    time_text = ax.text(0.02, 0.98, '', transform=ax.transAxes, fontsize=16,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=1))
+
+    # 处理图例，避免重复
+    handles, labels = ax.get_legend_handles_labels()
+    unique_labels = []
+    unique_handles = []
+    for handle, label in zip(handles, labels):
+        if label not in unique_labels:
+            unique_labels.append(label)
+            unique_handles.append(handle)
+    ax.legend(unique_handles, unique_labels)
+    ax.set_title('Human Trajectory VS Model Trajectory')
+
+    # 坐标轴翻转
+    if "sce1" in model_name or "sce2" in model_name:
+        ax.invert_xaxis()
+    elif "sce3" in model_name or "sce4" in model_name:
+        ax.invert_yaxis()
+
+    def animate(frame):
+        # 计算当前时间
+        current_time = frame * time_step
+
+        # 找到当前时间对应的轨迹点
+        current_idx = np.argmin(np.abs(model_traj[:, 2] - current_time))
+        current_point = model_traj[current_idx]
+
+        # 更新模型轨迹线（显示已经走过的路径）
+        past_mask = model_traj[:, 2] <= current_time
+        if past_mask.any():
+            line_trajectory.set_data(model_traj[past_mask, 0], model_traj[past_mask, 1])
+
+        # 计算当前航向角（使用相邻点的方向）
+        if current_idx < len(model_traj) - 1:
+            dx = model_traj[current_idx + 1, 0] - model_traj[current_idx, 0]
+            dy = model_traj[current_idx + 1, 1] - model_traj[current_idx, 1]
+            current_yaw = np.arctan2(dy, dx)
+        else:
+            # 最后一个点使用前一个方向
+            dx = model_traj[current_idx, 0] - model_traj[current_idx - 1, 0]
+            dy = model_traj[current_idx, 1] - model_traj[current_idx - 1, 1]
+            current_yaw = np.arctan2(dy, dx)
+
+        # 更新模型车辆矩形
+        if past_mask.any():
+            rect_corners = create_vehicle_rectangle(
+                current_point[0], current_point[1], current_yaw,
+                vehicle_length, vehicle_width
+            )
+        else:
+            rect_corners = create_vehicle_rectangle(
+                1000, 1000, 0,
+                vehicle_length, vehicle_width
+            )
+        vehicle_rect.set_xy(rect_corners.tolist())
+
+        # 更新人类轨迹和车辆
+        if human_traj is not None and human_line is not None and human_rect is not None:
+            human_past_mask = human_traj[:, 2] <= current_time
+            if human_past_mask.any():
+                human_line.set_data(human_traj[human_past_mask, 0], human_traj[human_past_mask, 1])
+
+            # 找到人类轨迹当前时间对应的点
+            human_current_idx = np.argmin(np.abs(human_traj[:, 2] - current_time))
+            if human_current_idx < len(human_traj):
+                human_current_point = human_traj[human_current_idx]
+
+                # 计算人类车辆航向角
+                if human_current_idx < len(human_traj) - 1:
+                    human_dx = human_traj[human_current_idx + 1, 0] - human_traj[human_current_idx, 0]
+                    human_dy = human_traj[human_current_idx + 1, 1] - human_traj[human_current_idx, 1]
+                    human_yaw = np.arctan2(human_dy, human_dx)
+                else:
+                    human_dx = human_traj[human_current_idx, 0] - human_traj[human_current_idx - 1, 0]
+                    human_dy = human_traj[human_current_idx, 1] - human_traj[human_current_idx - 1, 1]
+                    human_yaw = np.arctan2(human_dy, human_dx)
+
+                # 更新人类车辆矩形
+                human_rect_corners = create_vehicle_rectangle(
+                    human_current_point[0], human_current_point[1], human_yaw,
+                    vehicle_length, vehicle_width
+                )
+                human_rect.set_xy(human_rect_corners.tolist())
+
+        # 更新背景车1轨迹和车辆
+        if bv1_traj is not None and bv1_line is not None and bv1_rect is not None:
+            bv1_past_mask = bv1_traj[:, 2] <= current_time
+            if bv1_past_mask.any():
+                bv1_line.set_data(bv1_traj[bv1_past_mask, 0], bv1_traj[bv1_past_mask, 1])
+
+            # 找到背景车1轨迹当前时间对应的点
+            bv1_current_idx = np.argmin(np.abs(bv1_traj[:, 2] - current_time))
+            if bv1_current_idx < len(bv1_traj):
+                bv1_current_point = bv1_traj[bv1_current_idx]
+
+                if "sce1" in model_name:
+                    # sce1场景：背景车1为静止车辆，长边平行于y轴
+                    bv1_yaw = 90 * math.pi / 180  # 旋转90度，让长边平行于y轴
+                    bv1_length, bv1_width = 4.0, 2.0
+                elif "sce2" in model_name or "sce4" in model_name:
+                    # sce2和sce4场景：背景车1为动态车辆，长4m，宽2m
+                    # 计算背景车1航向角
+                    if bv1_current_idx < len(bv1_traj) - 1:
+                        bv1_dx = bv1_traj[bv1_current_idx + 1, 0] - bv1_traj[bv1_current_idx, 0]
+                        bv1_dy = bv1_traj[bv1_current_idx + 1, 1] - bv1_traj[bv1_current_idx, 1]
+                        bv1_yaw = np.arctan2(bv1_dy, bv1_dx)
+                    else:
+                        bv1_dx = bv1_traj[bv1_current_idx, 0] - bv1_traj[bv1_current_idx - 1, 0]
+                        bv1_dy = bv1_traj[bv1_current_idx, 1] - bv1_traj[bv1_current_idx - 1, 1]
+                        bv1_yaw = np.arctan2(bv1_dy, bv1_dx)
+                    bv1_length, bv1_width = 4.0, 2.0
+                else:
+                    # sce3场景：背景车1为动态车辆
+                    # 计算背景车1航向角
+                    if bv1_current_idx < len(bv1_traj) - 1:
+                        bv1_dx = bv1_traj[bv1_current_idx + 1, 0] - bv1_traj[bv1_current_idx, 0]
+                        bv1_dy = bv1_traj[bv1_current_idx + 1, 1] - bv1_traj[bv1_current_idx, 1]
+                        # 检查背景车1是否静止（前后两帧坐标相同）
+                        if abs(bv1_dx) < 1e-6 and abs(bv1_dy) < 1e-6:
+                            bv1_yaw = -90 * math.pi / 180  # 静止时车头朝向-90°
+                        else:
+                            bv1_yaw = np.arctan2(bv1_dy, bv1_dx)
+                    else:
+                        bv1_dx = bv1_traj[bv1_current_idx, 0] - bv1_traj[bv1_current_idx - 1, 0]
+                        bv1_dy = bv1_traj[bv1_current_idx, 1] - bv1_traj[bv1_current_idx - 1, 1]
+                        # 检查背景车1是否静止（前后两帧坐标相同）
+                        if abs(bv1_dx) < 1e-6 and abs(bv1_dy) < 1e-6:
+                            bv1_yaw = -90 * math.pi / 180  # 静止时车头朝向-90°
+                        else:
+                            bv1_yaw = np.arctan2(bv1_dy, bv1_dx)
+                    bv1_length, bv1_width = 2.5, 1.5
+
+                # 更新背景车1车辆矩形
+                bv1_rect_corners = create_vehicle_rectangle(
+                    bv1_current_point[0], bv1_current_point[1], bv1_yaw,
+                    bv1_length, bv1_width
+                )
+                bv1_rect.set_xy(bv1_rect_corners.tolist())
+
+        # 更新背景车2轨迹和车辆
+        if bv2_traj is not None and bv2_line is not None and bv2_rect is not None:
+            bv2_past_mask = bv2_traj[:, 2] <= current_time
+            if bv2_past_mask.any():
+                bv2_line.set_data(bv2_traj[bv2_past_mask, 0], bv2_traj[bv2_past_mask, 1])
+
+            # 找到背景车2轨迹当前时间对应的点
+            bv2_current_idx = np.argmin(np.abs(bv2_traj[:, 2] - current_time))
+            if bv2_current_idx < len(bv2_traj):
+                bv2_current_point = bv2_traj[bv2_current_idx]
+
+                # 计算背景车2航向角
+                if bv2_current_idx < len(bv2_traj) - 1:
+                    bv2_dx = bv2_traj[bv2_current_idx + 1, 0] - bv2_traj[bv2_current_idx, 0]
+                    bv2_dy = bv2_traj[bv2_current_idx + 1, 1] - bv2_traj[bv2_current_idx, 1]
+                else:
+                    bv2_dx = bv2_traj[bv2_current_idx, 0] - bv2_traj[bv2_current_idx - 1, 0]
+                    bv2_dy = bv2_traj[bv2_current_idx, 1] - bv2_traj[bv2_current_idx - 1, 1]
+
+                if abs(bv2_dx) < 1e-6 and abs(bv2_dy) < 1e-6:
+                    # 静止时固定角度
+                    if "sce1" in model_name:
+                        bv2_yaw = -175 * math.pi / 180
+                    elif "sce2" in model_name:
+                        bv2_yaw = -45 * math.pi / 180
+                    else:
+                        bv2_yaw = -90 * math.pi / 180
+                else:
+                    bv2_yaw = np.arctan2(bv2_dy, bv2_dx)
+
+                if "sce1" in model_name:
+                    bv2_length, bv2_width = 2.5, 1.5
+                else:
+                    bv2_length, bv2_width = 4.0, 2.0
+                # 更新背景车2车辆矩形
+                bv2_rect_corners = create_vehicle_rectangle(
+                    bv2_current_point[0], bv2_current_point[1], bv2_yaw,
+                    bv2_length, bv2_width
+                )
+                bv2_rect.set_xy(bv2_rect_corners.tolist())
+                animate._bv2_last_yaw = bv2_yaw
+
+        # 更新时间文本
+        time_text.set_text(f'Time: {current_time:.2f}s')
+
+        # 返回所有需要更新的元素
+        elements_to_return = [line_trajectory, vehicle_rect, time_text]
+        if human_line is not None:
+            elements_to_return.append(human_line)
+        if human_rect is not None:
+            elements_to_return.append(human_rect)
+        if bv1_line is not None:
+            elements_to_return.append(bv1_line)
+        if bv1_rect is not None:
+            elements_to_return.append(bv1_rect)
+        if bv2_line is not None:
+            elements_to_return.append(bv2_line)
+        if bv2_rect is not None:
+            elements_to_return.append(bv2_rect)
+
+        return elements_to_return
+
+    # 计算动画帧数
+    total_time = model_traj[-1, 2] - human_traj[0, 2]
+    num_frames = int(total_time / time_step) + 1
+
+    # 创建动画
+    animation = FuncAnimation(fig, animate, frames=num_frames,
+                              interval=time_step * 1000, blit=True, repeat=True)
+
+    return animation, fig
+
+
+def save_animation_as_gif(animation, fig, output_path, fps=100):
+    """
+    将动画保存为GIF文件
+
+    Args:
+        animation: matplotlib动画对象
+        fig: matplotlib图形对象
+        output_path: 输出文件路径
+        fps: 帧率
+    """
+    try:
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        # 保存GIF
+        animation.save(output_path, writer='pillow', fps=fps)
+        print(f"动画已保存为：{output_path}")
+
+    except Exception as e:
+        print(f"保存GIF失败：{e}")
 
 
 # ===================== 样条曲线函数 =====================
@@ -182,7 +821,7 @@ def visualize_trajectories(model, dataset, model_save_path, axis_flip='none',
                     bg_x = bg_data['sv2_x'].values
                     bg_y = bg_data['sv2_y'].values
                     # 绘制背景车轨迹（深绿色）
-                    plt.plot(bg_x, bg_y, color='darkgreen', linewidth=2, alpha=0.8, label='BV1')
+                    plt.plot(bg_x, bg_y, color=(62/255, 175/255, 73/255), linewidth=2, alpha=0.8, label='BV1')
                 except Exception as e:
                     print(f"无法读取背景车轨迹数据: {e}")
             elif "sce3" in model_name:
@@ -197,7 +836,7 @@ def visualize_trajectories(model, dataset, model_save_path, axis_flip='none',
                     bg_x = bg_data['sv1_x'].values
                     bg_y = bg_data['sv1_y'].values
                     # 绘制背景车轨迹（深绿色）
-                    plt.plot(bg_x, bg_y, color='darkgreen', linewidth=2, alpha=0.8, label='BV1')
+                    plt.plot(bg_x, bg_y, color=(62/255, 175/255, 73/255), linewidth=2, alpha=0.8, label='BV1')
                 except Exception as e:
                     print(f"无法读取背景车轨迹数据: {e}")
             elif "sce4" in model_name:
@@ -216,7 +855,7 @@ def visualize_trajectories(model, dataset, model_save_path, axis_flip='none',
                     bg_x = bg_data['sv1_x'].values
                     bg_y = bg_data['sv1_y'].values
                     # 绘制背景车轨迹（深绿色）
-                    plt.plot(bg_x, bg_y, color='darkgreen', linewidth=2, alpha=0.8, label='BV1')
+                    plt.plot(bg_x, bg_y, color=(62/255, 175/255, 73/255), linewidth=2, alpha=0.8, label='BV1')
                 except Exception as e:
                     print(f"无法读取背景车轨迹数据: {e}")
 

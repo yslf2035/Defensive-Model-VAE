@@ -3,7 +3,7 @@
 验证预测时域和控制时域的不同设置
 """
 
-from PathTracking import PathTracker
+from MPC_Tracking import PathTracker
 import numpy as np
 import matplotlib.pyplot as plt
 

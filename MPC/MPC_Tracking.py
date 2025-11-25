@@ -220,10 +220,13 @@ class MPCController:
         if control_horizon > prediction_horizon:
             raise ValueError("控制时域不能大于预测时域")
         
-        # 权重参数
-        self.Q = np.diag([10.0, 10.0, 5.0, 5.0])  # 状态权重 [x, y, theta, v]
-        self.R = np.diag([1.0, 10.0])  # 控制权重 [a, delta]
-        self.Qf = np.diag([10.0, 10.0, 5.0, 5.0])  # 终端状态权重
+        # 权重参数（仅跟踪航向角theta与速度v）
+        self.Q = np.diag([20.0, 5.0])  # 状态权重 [theta, v]
+        self.R = np.diag([1.0, 50.0])  # 控制增量权重 [Δa, Δdelta]（控制量变化量的权重）
+        self.Qf = np.diag([20.0, 5.0])  # 终端状态权重
+        
+        # 保存上一次的控制输入，用于计算控制增量
+        self.last_control = None
         
     def solve_mpc(self, current_state: np.ndarray, reference_trajectory: np.ndarray) -> np.ndarray:
         """
@@ -231,13 +234,16 @@ class MPCController:
         
         Args:
             current_state: 当前状态 [x, y, theta, v]
-            reference_trajectory: 参考轨迹 [prediction_horizon+1, 4]
+            reference_trajectory: 参考轨迹 [prediction_horizon+1, 2]，仅包含 [theta, v]
             
         Returns:
             最优控制序列 [control_horizon, 2]
         """
         # 初始控制猜测 - 只优化控制时域内的控制输入
         u0 = np.zeros((self.control_horizon, 2))
+        # 如果有上一次的控制输入，将其作为第一个控制输入的初始猜测
+        if self.last_control is not None:
+            u0[0] = self.last_control.copy()
         
         # 定义目标函数
         def objective(u_flat):
@@ -255,20 +261,34 @@ class MPCController:
             # 预测轨迹
             states = self.vehicle.predict_trajectory(current_state, full_u, self.dt)
             
-            # 计算代价
+            # 计算代价（仅基于theta与v）
             cost = 0.0
             
             # 跟踪误差代价
             for i in range(self.prediction_horizon + 1):
-                state_error = states[i] - reference_trajectory[i]
+                state_slice = states[i, 2:4]  # 提取theta与v
+                state_error = state_slice - reference_trajectory[i]
                 if i < self.prediction_horizon:
                     cost += state_error.T @ self.Q @ state_error
                 else:
                     cost += state_error.T @ self.Qf @ state_error
             
-            # 控制代价 - 只对控制时域内的控制输入计算代价
+            # 控制增量代价 - 惩罚控制量变化量 ||Δu||^2
             for i in range(self.control_horizon):
-                cost += u[i].T @ self.R @ u[i]
+                if i == 0:
+                    # 第一个控制输入：与前一个控制输入比较
+                    if self.last_control is None:
+                        # 如果没有前一个控制量，认为Δu=0（不增加代价）
+                        delta_u = np.zeros(2)
+                    else:
+                        # 计算与前一个控制输入的差值
+                        delta_u = u[i] - self.last_control
+                else:
+                    # 后续控制输入：与上一个控制输入比较
+                    delta_u = u[i] - u[i-1]
+                
+                # 控制增量代价：||Δu||^2 = Δu^T @ R @ Δu
+                cost += delta_u.T @ self.R @ delta_u
             
             return cost
         
@@ -303,9 +323,15 @@ class MPCController:
         )
         
         if result.success:
-            return result.x.reshape(self.control_horizon, 2)
+            control_sequence = result.x.reshape(self.control_horizon, 2)
+            # 更新上一次的控制输入，用于下次计算控制增量
+            self.last_control = control_sequence[0].copy()
+            return control_sequence
         else:
             print(f"MPC优化失败: {result.message}")
+            # 优化失败时也更新last_control（如果之前有值）
+            if self.last_control is not None:
+                self.last_control = u0[0].copy()
             return u0
 
 
@@ -350,14 +376,14 @@ class PathTracker:
         Returns:
             (current_state, control) - 当前状态和控制输入
         """
-        # 生成参考轨迹
-        ref_trajectory = np.zeros((self.mpc.prediction_horizon + 1, 4))
+        # 生成参考轨迹（仅航向角与速度）
+        ref_trajectory = np.zeros((self.mpc.prediction_horizon + 1, 2))
         for i in range(self.mpc.prediction_horizon + 1):
             t_ref = current_time + i * self.dt
             x_ref, y_ref, vx_ref, vy_ref = self.path_interp.get_reference(t_ref)
             theta_ref = self.path_interp.get_reference_heading(t_ref)
             v_ref = np.sqrt(vx_ref**2 + vy_ref**2)
-            ref_trajectory[i] = [x_ref, y_ref, theta_ref, v_ref]
+            ref_trajectory[i] = [theta_ref, v_ref]
         
         # 求解MPC
         control_sequence = self.mpc.solve_mpc(self.current_state, ref_trajectory)
@@ -403,7 +429,7 @@ class PathTracker:
         
         return np.array(self.times), np.array(self.trajectory), np.array(self.controls)
     
-    def plot_results(self, save_path: Optional[str] = None):
+    def plot_results(self, save_path: Optional[str] = None, axis_flip: str = 'none'):
         """绘制结果"""
         times = np.array(self.times)
         states = np.array(self.trajectory)
@@ -428,6 +454,14 @@ class PathTracker:
         axes[0, 0].legend(fontsize=16)
         axes[0, 0].grid(True)
         axes[0, 0].axis('equal')
+        # 根据axis_flip参数翻转坐标轴
+        if axis_flip == 'x':
+            axes[0, 0].invert_xaxis()
+        elif axis_flip == 'y':
+            axes[0, 0].invert_yaxis()
+        elif axis_flip == 'xy':
+            axes[0, 0].invert_xaxis()
+            axes[0, 0].invert_yaxis()
         
         # 位置误差
         ref_x = np.array([self.path_interp.get_reference(t)[0] for t in times])
@@ -525,7 +559,7 @@ def main():
     
     # 运行仿真
     total_time = waypoints[-1, 2] + 2.0  # 比路径时间长2秒
-    times, states, controls = tracker.run_simulation(total_time)
+    times, states, controls = tracker.run_simulation(float(total_time))
     
     # 输出结果统计
     print("\n=== 仿真结果统计 ===")

@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import random
 
+# 人类轨迹数据处理
 # ===================== 场景与动作配置 =====================
 SCENE_CONFIG = {
     'StaticBlindTown05': {
@@ -138,10 +139,13 @@ def collect_trajectories(data_root, scenes, actions, target_points=5, point_mode
 
 
 def pad_and_save(trajs, save_path):
-    # 所有轨迹长度已经统一为target_points，直接保存
-    trajs_array = np.array(trajs)  # (num_samples, target_points, 3) - 时间+轨迹
-    np.save(save_path, trajs_array)
-    print(f"已保存 {trajs_array.shape[0]} 条轨迹，每条轨迹 {trajs_array.shape[1]} 个点，保存路径: {save_path}")
+    if save_path is not None:
+        # 所有轨迹长度已经统一为target_points，直接保存
+        trajs_array = np.array(trajs)  # (num_samples, target_points, 3) - 时间+轨迹
+        np.save(save_path, trajs_array)
+        print(f"已保存 {trajs_array.shape[0]} 条轨迹，每条轨迹 {trajs_array.shape[1]} 个点，保存路径: {save_path}")
+    else:
+        print("No saving path, mode error")
 
 # ===================== 主程序 =====================
 if __name__ == "__main__":
@@ -168,6 +172,7 @@ if __name__ == "__main__":
             trajs = trajs1 + trajs2
         else:
             trajs = []
+            save_path = None
             print("Unknown point mode...")
 
         if len(trajs) == 0:

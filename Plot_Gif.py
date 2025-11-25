@@ -22,7 +22,7 @@ import pandas as pd
 import math
 import os
 from Tools import create_smooth_curve
-from training_VAE import ConditionalTrajectoryVAE, TrajectoryDataset
+from Training_VAE import ConditionalTrajectoryVAE, TrajectoryDataset
 
 def load_model_and_generate_trajectory(model_path, start_x, start_y, seq_len=12, dim=3, latent_dim=8, device='cpu'):
     """

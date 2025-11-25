@@ -1,7 +1,8 @@
-from PathTracking import PathTracker
-from Tools import create_path_tracking_gif, create_path_tracking_gif_with_reference
 import numpy as np
+from MPC_Tracking import PathTracker
+from Drawing_Tools import create_path_tracking_gif, create_path_tracking_gif_with_reference
 
+# 指定路径点和初始状态的MPC跟踪测试
 # 定义路径点 [x, y, t]
 waypoints = np.array([
     [0.0, 0.0, 0.0],    # 起点

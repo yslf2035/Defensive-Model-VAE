@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from PathTracking import PathTracker, create_test_path
+    from MPC_Tracking import PathTracker, create_test_path
     print("✓ 成功导入PathTracking模块")
 except ImportError as e:
     print(f"✗ 导入失败: {e}")
@@ -71,7 +71,7 @@ def test_mpc_optimization():
     print("\n=== 测试MPC优化 ===")
     
     try:
-        from PathTracking import VehicleModel, MPCController
+        from MPC_Tracking import VehicleModel, MPCController
         
         # 创建车辆模型
         vehicle = VehicleModel()
@@ -112,7 +112,7 @@ def test_vehicle_dynamics():
     print("\n=== 测试车辆动力学 ===")
     
     try:
-        from PathTracking import VehicleModel
+        from MPC_Tracking import VehicleModel
         
         vehicle = VehicleModel()
         
