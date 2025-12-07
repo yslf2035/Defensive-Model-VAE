@@ -6,7 +6,6 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib
 from scipy.optimize import minimize
 from scipy.interpolate import interp1d
 import time
@@ -24,7 +23,7 @@ plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 class VehicleModel:
     """车辆动力学模型 - 自行车模型"""
     
-    def __init__(self, wheelbase: float = 2.8, max_steer: float = 0.5, max_accel: float = 3.0):
+    def __init__(self, wheelbase: float = 2.8, max_steer: float = 0.5, max_accel: float = 7.0):
         """
         初始化车辆模型参数
         
@@ -90,7 +89,7 @@ class VehicleModel:
 class PathInterpolator:
     """路径插值器"""
     
-    def __init__(self, waypoints: np.ndarray):
+    def __init__(self, waypoints: np.ndarray, initial_state: np.ndarray):
         """
         初始化路径插值器
         
@@ -98,6 +97,7 @@ class PathInterpolator:
             waypoints: 路径点 [N, 3] - [x, y, t]
         """
         self.waypoints = waypoints
+        self.initial_state = initial_state
         self._create_interpolators()
     
     def _create_interpolators(self):
@@ -140,17 +140,28 @@ class PathInterpolator:
         # 计算速度插值
         if n_points >= 2:
             dt = np.diff(t)
-            dx = np.diff(x)
-            dy = np.diff(y)
+            # 使用位置插值器获得在原始时间点上的平滑轨迹
+            x_smooth = self.x_interp(t)
+            y_smooth = self.y_interp(t)
+            dx = np.diff(x_smooth)
+            dy = np.diff(y_smooth)
             
             # 避免除零错误
             dt = np.where(dt == 0, 1e-6, dt)
             
             vx = dx / dt
             vy = dy / dt
+
+            # 添加初始速度
+            vx0 = self.initial_state[-2]
+            vy0 = self.initial_state[-1]
+            vx = np.concatenate((np.array([vx0]), vx))
+            vy = np.concatenate((np.array([vy0]), vy))
             
             # 速度插值时间点
             t_vel = t[:-1] + dt/2
+            t0 = 0.0
+            t_vel = np.concatenate((np.array([t0]), t_vel))
             
             try:
                 # 根据速度点数量选择插值方法
@@ -352,17 +363,20 @@ class PathTracker:
             control_horizon: MPC控制时域
             dt: 时间步长
         """
+        initial_state_copy = initial_state.copy()
+        initial_state_copy[-2:] = np.sqrt(np.sum(initial_state_copy[-2:] ** 2))
+        initial_state_copy = initial_state_copy[:-1]
         self.waypoints = waypoints
-        self.current_state = initial_state.copy()
+        self.current_state = initial_state_copy.copy()
         self.dt = dt
         
         # 初始化组件
         self.vehicle = VehicleModel(wheelbase=wheelbase)
-        self.path_interp = PathInterpolator(waypoints)
+        self.path_interp = PathInterpolator(waypoints, initial_state)
         self.mpc = MPCController(self.vehicle, prediction_horizon, control_horizon, dt)
         
         # 记录数据
-        self.trajectory = [initial_state.copy()]
+        self.trajectory = [initial_state_copy.copy()]
         self.controls = []
         self.times = [0.0]
         
@@ -544,8 +558,8 @@ def main():
     print(f"路径点数量: {len(waypoints)}")
     print(f"路径总时长: {waypoints[-1, 2]:.2f}s")
     
-    # 初始状态 [x, y, theta, v]
-    initial_state = np.array([0.0, 0.0, 0.0, 2.0])  # 初始位置(0,0), 航向角0, 速度2m/s
+    # 初始状态 [x, y, theta, vx, vy]
+    initial_state = np.array([0.0, 0.0, 0.0, 0.0, 2.0])  # 初始位置(0,0), 航向角0, 速度2m/s
     
     # 创建路径跟踪器
     tracker = PathTracker(

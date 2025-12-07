@@ -32,7 +32,7 @@ def test_basic_functionality():
         ])
         
         # 初始状态
-        initial_state = np.array([0.0, 0.0, 0.0, 1.5])
+        initial_state = np.array([0.0, 0.0, 0.0, 0.0, 1.5])
         
         # 创建跟踪器
         tracker = PathTracker(

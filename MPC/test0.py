@@ -17,8 +17,8 @@ waypoints = np.array([
     [63.0, 0.5, 9.0]    # 终点
 ])
 
-# 初始状态 [x, y, theta, v]
-initial_state = np.array([0.0, 0.0, 0.0, 12.0])
+# 初始状态 [x, y, theta, vx, vy]
+initial_state = np.array([0.0, 0.0, 0.0, 0.0, 12.0])
 
 # 创建路径跟踪器
 tracker = PathTracker(

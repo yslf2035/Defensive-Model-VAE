@@ -17,8 +17,8 @@ def test_control_horizon():
         [20.0, 0.0, 4.0],   # 终点
     ])
     
-    # 初始状态 [x, y, theta, v]
-    initial_state = np.array([0.0, 0.0, 0.0, 3.0])
+    # 初始状态 [x, y, theta, vx, vy]
+    initial_state = np.array([0.0, 0.0, 0.0, 0.0, 3.0])
     
     # 测试不同的控制时域设置
     test_cases = [

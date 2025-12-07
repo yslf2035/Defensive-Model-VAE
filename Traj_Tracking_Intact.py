@@ -7,13 +7,13 @@ from Tools import plot_gif_human_vs_model, save_animation_as_gif, process_model_
 
 # 完整轨迹：潜在风险点前人类轨迹 + 潜在风险点后VAE模型生成轨迹
 # 模型参数
-model_path = 'training/models/vae_sce2_ld8_epoch2000.pth'  # 模型文件路径
-seq_len = 10                  # 轨迹长度（sce3=12，其他=10）
+model_path = 'training/models/vae_offset_sce3_ld8_epoch3000.pth'  # 模型文件路径
+seq_len = 12                  # 轨迹长度（sce3=12，其他=10）
 dim = 3                       # 每个点的维度
 latent_dim = 8                # 潜在空间维度
 device = 'cpu'                # 计算设备
 # CSV文件路径
-csv_path = 'DefensiveData/DynamicBlindTown05/减速+转向/exp_12_control_DynamicBlindTown05_2.csv'
+csv_path = 'DefensiveData/PredictableMovementTown05/减速/exp_8_control_PredictableMovementTown05_2.csv'
 
 model_name = os.path.basename(model_path)
 csv_name = os.path.basename(csv_path)
@@ -23,20 +23,21 @@ human_trajectory, bv1_trajectory, bv2_trajectory = get_human_and_bv_trajectories
 # 模型生成轨迹起始点
 if "sce1" in model_name or "sce2" in model_name or "sce3" in model_name or "sce4" in model_name:
     print("使用CSV文件获取起始条件")
-    start_x, start_y, start_angle, start_v = get_start_conditions_from_csv(csv_path, model_name)
+    start_x, start_y, start_angle, start_vx, start_vy = get_start_conditions_from_csv(csv_path, model_name)
 else:
     print("模型名称不合规，使用默认起始条件")
     start_x, start_y = 155.0, -15.0
     start_angle = -90 * math.pi / 180
-    start_v = 10.0
+    start_vx = 0.0
+    start_vy = 10.0
 
 # VAE模型生成轨迹点 [x, y, t]
 waypoints = load_model_and_generate_trajectory(model_path, start_x, start_y, seq_len, dim, latent_dim, device)
 waypoints = waypoints[:, [1, 2, 0]]
 waypoints[0, 2] = 0.0
 
-# 初始状态 [x, y, theta, v]
-initial_state = np.array([start_x, start_y, start_angle, start_v])
+# 初始状态 [x, y, theta, vx, vy]
+initial_state = np.array([start_x, start_y, start_angle, start_vx, start_vy])
 
 if "sce1" in model_name:
     time_step = 0.02
@@ -68,12 +69,12 @@ model_name_parts = model_name.split('_')
 csv_name_parts = csv_name.split('_')
 
 # 绘制结果
-pic_output_path = ("MPC/pics/vae_" + model_name_parts[1] + "_exp" + csv_name_parts[1] + "_" +
+pic_output_path = ("MPC/pics/vae_" + model_name_parts[2] + "_exp" + csv_name_parts[1] + "_" +
                    csv_name_parts[-1].split('.')[0] + ".png")
-tracker.plot_results(pic_output_path, 'x')  # sce1,sce2-->'x',sce3,sce4-->'y'
+tracker.plot_results(pic_output_path, 'y')  # sce1,sce2-->'x',sce3,sce4-->'y'
 
 # 绘制gif
-output_filename = ('animation_' + model_name_parts[1] + '_' + csv_name_parts[1] + '_' +
+output_filename = ('animation_' + model_name_parts[2] + '_' + csv_name_parts[1] + '_' +
                    csv_name_parts[-1].split('.')[0] + '.gif')  # 输出文件名
 output_path = f'MPC/gifs/{output_filename}'  # 输出路径
 print("创建gif...")

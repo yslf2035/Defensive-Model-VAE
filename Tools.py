@@ -30,6 +30,10 @@ def load_model_and_generate_trajectory(model_path, start_x, start_y, seq_len=12,
 
     Returns:
         generated_trajectory: 生成的轨迹数据 (seq_len, 3) - [时间, x, y]
+        说明：
+        - 条件VAE内部实际生成的是“相对起点偏移轨迹” [t, dx, dy]
+        - 本函数在解码后会自动执行 x = start_x + dx, y = start_y + dy，
+          返回的是加上起点后的全局轨迹，方便后续直接使用
     """
     # 加载模型
     model = ConditionalTrajectoryVAE(seq_len, dim, latent_dim).to(device)
@@ -50,8 +54,13 @@ def load_model_and_generate_trajectory(model_path, start_x, start_y, seq_len=12,
         # 编码条件信息
         h_condition = model.condition_encoder(condition)
 
-        # 生成轨迹
-        generated_trajectory = model.decode(z, h_condition).cpu().numpy()[0]  # (seq_len, 3)
+        # 生成相对轨迹：[t, dx, dy]
+        rel_traj = model.decode(z, h_condition).cpu().numpy()[0]  # (seq_len, 3)
+
+        # 将相对轨迹转换为全局轨迹：[t, x, y]
+        generated_trajectory = rel_traj.copy()
+        generated_trajectory[:, 1] = start_x + rel_traj[:, 1]
+        generated_trajectory[:, 2] = start_y + rel_traj[:, 2]
 
     return generated_trajectory
 
@@ -107,11 +116,13 @@ def get_start_conditions_from_csv(csv_path, model_name):
         start_x = start_row['ego_x']
         start_y = start_row['ego_y']
         start_angle = start_row['ego_yaw'] * math.pi / 180
-        start_v = math.sqrt(start_row['ego_vx'] ** 2 + start_row['ego_vy'] ** 2)
+        start_vx = start_row['ego_vx']
+        start_vy = start_row['ego_vy']
 
-        print(f"从CSV获取起始条件：x={start_x:.2f}, y={start_y:.2f}, angle={start_angle:.2f}rad, v={start_v:.2f}")
+        print(f"从CSV获取起始条件：x={start_x:.2f}, y={start_y:.2f}, angle={start_angle:.2f}rad,"
+              f"vx={start_vx:.2f}, vy={start_vy:.2f}")
 
-        return start_x, start_y, start_angle, start_v
+        return start_x, start_y, start_angle, start_vx, start_vy
 
     except Exception as e:
         print(f"读取CSV文件失败：{e}")
@@ -778,8 +789,16 @@ def visualize_trajectories(model, dataset, model_save_path, axis_flip='none',
         # 从潜在空间采样随机向量
         z = torch.randn(num_samples, model.latent_dim).to(next(model.parameters()).device)
 
-        # 条件生成：结合随机向量和条件向量生成轨迹
-        generated_samples = model.decode(z, h_condition).cpu().numpy()  # (num_samples, seq_len, dim)
+        # 条件生成：结合随机向量和条件向量生成“相对起点偏移轨迹” [t, dx, dy]
+        rel_generated_samples = model.decode(z, h_condition).cpu().numpy()  # (num_samples, seq_len, dim)
+
+        # 将相对轨迹转换为全局轨迹，便于与训练数据进行对比
+        # start_points 此时为 (num_samples, 2) 的tensor，包含绝对起点(x_start, y_start)
+        start_points_np = start_points.cpu().numpy() if hasattr(start_points, 'cpu') else np.asarray(start_points)
+        generated_samples = rel_generated_samples.copy()
+        for i in range(num_samples):
+            generated_samples[i, :, 1] = start_points_np[i, 0] + rel_generated_samples[i, :, 1]
+            generated_samples[i, :, 2] = start_points_np[i, 1] + rel_generated_samples[i, :, 2]
         
         # 调试信息：显示生成的时间信息
         print(f"\n=== 生成轨迹的时间信息 ===")
@@ -871,12 +890,12 @@ def visualize_trajectories(model, dataset, model_save_path, axis_flip='none',
             else:
                 train_start_angle = None
             
-            train_smooth_x, train_smooth_y = create_smooth_curve(train_points, time_interval=0.015)
+            train_smooth_x, train_smooth_y = create_smooth_curve(train_points, time_interval=0.02)
             
             # 生成轨迹点
             gen_points = generated_samples[i, :, 1:3]  # 只取x和y坐标
             
-            gen_smooth_x, gen_smooth_y = create_smooth_curve(gen_points, time_interval=0.015, start_angle=(-90)*(math.pi/180))
+            gen_smooth_x, gen_smooth_y = create_smooth_curve(gen_points, time_interval=0.02, start_angle=(-90)*(math.pi/180))
 
             # 绘制平滑的训练数据轨迹（红色）
             plt.plot(train_smooth_x, train_smooth_y, 'r-', linewidth=2, alpha=0.8, label='Training Data')

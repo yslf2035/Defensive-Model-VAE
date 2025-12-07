@@ -30,7 +30,7 @@ def collect_csv_files(base_folder):
     """
     csv_files = []
     # subfolders = ['减速', '减速+转向', '转向']
-    subfolders = ['减速']
+    subfolders = ['减速+转向']
 
     for subfolder in subfolders:
         folder_path = os.path.join(base_folder, subfolder)
@@ -66,7 +66,7 @@ def process_single_trajectory(csv_path, model_path, seq_len=10, dim=3, latent_di
     try:
         model_name = os.path.basename(model_path)
         # 获取起始条件
-        start_x, start_y, start_angle, start_v = get_start_conditions_from_csv(csv_path, model_name)
+        start_x, start_y, start_angle, start_vx, start_vy = get_start_conditions_from_csv(csv_path, model_name)
         
         # VAE模型生成轨迹点 [t, x, y]
         waypoints = load_model_and_generate_trajectory(
@@ -75,9 +75,9 @@ def process_single_trajectory(csv_path, model_path, seq_len=10, dim=3, latent_di
         # 转换为 [x, y, t] 格式
         waypoints = waypoints[:, [1, 2, 0]]
         waypoints[0, 2] = 0.0
-        
-        # 初始状态 [x, y, theta, v]
-        initial_state = np.array([start_x, start_y, start_angle, start_v])
+
+        # 初始状态 [x, y, theta, vx, vy]
+        initial_state = np.array([start_x, start_y, start_angle, start_vx, start_vy])
 
         if "sce1" in model_name:
             time_step = 0.02
@@ -153,7 +153,7 @@ def batch_process_trajectories(csv_files, model_path, seq_len=10, dim=3, latent_
             all_times.append(times)
             
             # 保存单条轨迹为npy文件
-            npy_filename = f"tracked_trajectory_{model_name_parts[1]}_exp{csv_name_parts[1]}_{csv_name_parts[-1].split('.')[0]}.npy"
+            npy_filename = f"tracked_trajectory_{model_name_parts[2]}_exp{csv_name_parts[1]}_{csv_name_parts[-1].split('.')[0]}.npy"
             npy_filepath = os.path.join(save_dir, npy_filename)
             np.save(npy_filepath, states)
             saved_files.append(npy_filepath)
@@ -333,6 +333,7 @@ def plot_spatial_distribution(coordinates, title, model_name, save_path=None, gr
     Args:
         coordinates: 坐标点数组 [N, 2] - [x, y]
         title: 图标题
+        model_name: 模型名称
         save_path: 保存路径（可选）
         grid_size: 网格大小（米），默认1.0m
         cmap: 可选的自定义颜色映射
@@ -509,14 +510,14 @@ def main():
     
     # 配置参数
     base_folder = 'DefensiveData/PredictableMovementTown05'
-    model_path = 'training/models/vae_sce3_ld8_epoch1000.pth'
+    model_path = 'training/models/vae_offset_sce3_ld8_epoch3000.pth'
     model_name = os.path.basename(model_path)
     model_name_parts = model_name.split('_')
     seq_len = 12  # sce3=12, 其他=10
     dim = 3
     latent_dim = 8
     device = 'cpu'
-    human_trajectory_path = 'training/DefensiveDataProcessed/trajectory_' + model_name_parts[1] + '.npy'
+    human_trajectory_path = 'training/DefensiveDataProcessed/trajectory_' + model_name_parts[2] + '.npy'
     
     # 收集所有CSV文件
     print("\n[Step 1] Collecting CSV files...")
@@ -571,7 +572,7 @@ def main():
     
     # 绘制速度分布对比图
     print("\n[Step 6] Plotting velocity distribution...")
-    plot_save_path = 'results/ModelValidation/velocity_distribution_comparison.png'
+    plot_save_path = 'results/ModelValidation/velocity_distribution_comparison_' + model_name_parts[2] + '.png'
     plot_velocity_distribution(generated_velocities, human_velocities, plot_save_path)
     
     # 提取坐标点并绘制空间分布热力图
@@ -594,24 +595,24 @@ def main():
 
     # 绘制生成轨迹的空间分布
     print("\nPlotting generated trajectories spatial distribution...")
-    gen_spatial_save_path = 'results/ModelValidation/generated_trajectories_spatial_distribution' + model_name_parts[1] + '.png'
+    gen_spatial_save_path = 'results/ModelValidation/generated_trajectories_spatial_distribution_' + model_name_parts[2] + '.png'
     _ = plot_spatial_distribution(
         generated_coordinates,
         'Model Trajectories Spatial Distribution',
-        gen_spatial_save_path,
         model_name,
+        gen_spatial_save_path,
         grid_size=grid_size,
         cmap=custom_cmap
     )
     
     # 绘制人类轨迹的空间分布
     print("\nPlotting human trajectories spatial distribution...")
-    human_spatial_save_path = 'results/ModelValidation/human_trajectories_spatial_distribution' + model_name_parts[1] + '.png'
+    human_spatial_save_path = 'results/ModelValidation/human_trajectories_spatial_distribution_' + model_name_parts[2] + '.png'
     _ = plot_spatial_distribution(
         human_coordinates,
         'Human Trajectories Spatial Distribution',
-        human_spatial_save_path,
         model_name,
+        human_spatial_save_path,
         grid_size=grid_size,
         cmap=custom_cmap
     )

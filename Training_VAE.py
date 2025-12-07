@@ -8,13 +8,21 @@
 4. 条件约束：通过起点坐标条件控制生成轨迹的起点
 
 训练目标：
-- 重构损失：确保重建轨迹与原始轨迹相似
+- 重构损失：确保重建轨迹与原始轨迹（在相对坐标系下）相似
 - KL散度：正则化潜在空间分布
-- 起点损失：约束生成轨迹的起点坐标
+- 起点损失：约束生成轨迹在相对坐标系下的起点为(0,0)
 
 数据格式：
-- 输入：(batch_size, seq_len, 3) - [时间t, x坐标, y坐标]
+- 原始数据：(batch_size, seq_len, 3) - [时间t, x坐标, y坐标]
 - 条件：起点坐标 (x, y) - 2维
+
+本实现中的实际训练形式：
+- 时间t 保持为绝对时间，不做平移
+- 位置部分改为相对于起点的偏移量：
+  dx = x - x_start, dy = y - y_start
+- 模型学习的是随时间变化的偏移轨迹 [t, dx, dy]
+- 生成时：先根据给定起点 (x_start, y_start) 和随机潜在向量生成 [t, dx, dy]，
+  再通过 x = x_start + dx, y = y_start + dy 还原到全局坐标系
 """
 
 import numpy as np
@@ -92,28 +100,31 @@ class ConditionalTrajectoryVAE(nn.Module):
         )
 
     def get_start_points(self, x):
-        """提取轨迹的起点坐标（只考虑x和y）"""
-        # x格式：(batch_size, seq_len, 3) - [时间t, x坐标, y坐标]
-        start_points = x[:, 0, 1:3]  # (batch_size, 2) - 起点(x,y)
+        """
+        提取轨迹的起点坐标（只考虑x和y）
+        注意：
+        - 当前训练流程会在外部将坐标转换为“相对起点偏移”(dx, dy)，
+          此时该函数得到的通常是(0,0)，仅保留用于兼容/调试。
+        """
+        # x格式：(batch_size, seq_len, 3) - [时间t, x坐标或dx, y坐标或dy]
+        start_points = x[:, 0, 1:3]
         return start_points
 
-    def encode(self, x):
+    def encode(self, x, start_points):
         """
         编码过程：将轨迹和起点条件编码到潜在空间
-        输入x格式：(batch_size, seq_len, 3) - [时间t, x坐标, y坐标]
+        输入x格式：(batch_size, seq_len, 3) - [时间t, dx, dy]（相对起点偏移）
+        start_points格式：(batch_size, 2) - 全局起点坐标(x_start, y_start)
         """
-        # 提取起点坐标（只考虑x和y）
-        start_points = self.get_start_points(x)
-        
-        # 编码轨迹（包含时间信息）
-        h_traj = self.encoder(x)  # 输入完整的3维数据
-        
-        # 编码条件信息
+        # 编码轨迹（包含时间信息 + 相对位置信息）
+        h_traj = self.encoder(x)
+
+        # 编码条件信息（使用全局起点坐标）
         h_condition = self.condition_encoder(start_points)
-        
+
         # 合并轨迹特征和条件特征
         h_combined = torch.cat([h_traj, h_condition], dim=1)
-        
+
         mu = self.fc_mu(h_combined)
         logvar = self.fc_logvar(h_combined)
         return mu, logvar, h_condition
@@ -136,12 +147,13 @@ class ConditionalTrajectoryVAE(nn.Module):
         z_condition = torch.cat([z, condition], dim=1)
         return self.decoder(z_condition)
 
-    def forward(self, x):
+    def forward(self, x, start_points):
         """
         前向传播：完整的编码-解码过程
-        输入x格式：(batch_size, seq_len, 3) - [时间t, x坐标, y坐标]
+        输入x格式：(batch_size, seq_len, 3) - [时间t, dx, dy]（相对起点偏移）
+        start_points格式：(batch_size, 2) - 全局起点坐标(x_start, y_start)
         """
-        mu, logvar, condition = self.encode(x)
+        mu, logvar, condition = self.encode(x, start_points)
         z = self.reparameterize(mu, logvar)
         recon_x = self.decode(z, condition)
         return recon_x, mu, logvar, condition
@@ -151,6 +163,7 @@ def conditional_vae_loss(recon_x, x, mu, logvar, condition, alpha=1.0, time_weig
     """
     条件VAE损失函数，包含起点约束和时间约束
     Args:
+        recon_x, x: 此处的x为“相对起点偏移轨迹”，格式为 [t, dx, dy]
         alpha: 起点约束的权重，控制起点约束的强度
         time_weight: 时间约束的权重，控制时间约束的强度
     """
@@ -163,13 +176,10 @@ def conditional_vae_loss(recon_x, x, mu, logvar, condition, alpha=1.0, time_weig
     # 起点约束损失：确保生成轨迹的起点符合条件
     start_loss = 0
     if alpha > 0:
-        # 提取真实轨迹的起点坐标（只考虑x和y）
-        real_start = x[:, 0, 1:3]  # 真实轨迹的起点(x,y)
-        
-        # 提取重构轨迹的起点坐标（只考虑x和y）
-        recon_start = recon_x[:, 0, 1:3]  # 重构轨迹的起点(x,y)
-        
-        # 起点损失
+        # 此时x和recon_x都是相对坐标，理论上起点应为(0,0)，
+        # 该约束鼓励模型在相对坐标系中保持起点为零
+        real_start = x[:, 0, 1:3]      # 真实相对起点(dx, dy)，应接近(0,0)
+        recon_start = recon_x[:, 0, 1:3]  # 重构相对起点(dx, dy)
         start_loss = nn.functional.mse_loss(recon_start, real_start, reduction='mean')
     
     # 时间约束损失：确保生成的时间信息合理
@@ -192,19 +202,19 @@ def conditional_vae_loss(recon_x, x, mu, logvar, condition, alpha=1.0, time_weig
 if __name__ == "__main__":
     # ====== 可修改参数 ======
     mode = 'training'  # 'training', 'visualization'
-    data_path = 'training/DefensiveDataProcessed/trajectory_sce2.npy'  # 轨迹数据集路径，需为numpy数组 (num_samples, seq_len, dim)
-    seq_len = 10                  # 轨迹长度（每条轨迹包含的采样点数量）
+    data_path = 'training/DefensiveDataProcessed/trajectory_sce3.npy'  # 轨迹数据集路径，需为numpy数组 (num_samples, seq_len, dim)
+    seq_len = 12                  # 轨迹长度（每条轨迹包含的采样点数量）
     dim = 3                       # 每个点的维度（3:t,x,y）
     latent_dim = 8                # 潜在空间维度（VAE编码器输出的潜在向量维度）
-    batch_size = 16              # 批大小（每次训练使用的样本数量）
+    batch_size = 75               # 批大小（每次训练使用的样本数量）: sce1 = 38, sce2 = 16, sce3 = 75, sce4 = 135
     lr = 1e-3                     # 学习率（优化器更新参数时的步长）
-    epochs = 2000                 # 训练轮数
+    epochs = 3000                 # 训练轮数
     # device = 'cuda' if torch.cuda.is_available() else 'cpu'  # 设备
     device = 'cpu'
     model_name = data_path.split('/')[-1]
     model_name = model_name.split('.')[0]
     model_name = model_name.replace("trajectory_", "", 1)
-    model_save_path = 'training/models/vae_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '.pth'  # 模型保存路径
+    model_save_path = 'training/models/vae_offset_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '.pth'  # 模型保存路径
 
     # ====== 起点终点控制参数 ======
     # 训练时：始终使用真实数据的起点坐标（推荐）
@@ -217,25 +227,26 @@ if __name__ == "__main__":
     custom_start_end = [(155.0, -15.0), (155.0, 40.0)]  # 自定义起点坐标，格式为[(start_x, start_y), (end_x, end_y)]
     
     # 起点约束权重（训练时使用）
-    start_end_weight = 1.0  # 控制起点约束的强度，值越大约束越强
+    start_end_weight = 2.0  # 控制起点约束的强度，值越大约束越强
     
     # 时间约束权重（训练时使用）
-    time_weight = 0.5  # 控制时间约束的强度，确保时间信息合理
+    time_weight = 2.0  # 控制时间约束的强度，确保时间信息合理
 
     # ====== 可视化控制参数 ======
     # 控制绘制训练数据的轨迹范围
     train_traj_start = 0  # 绘制训练数据的起始轨迹索引（从0开始）
     train_traj_end = 9    # 绘制训练数据的结束轨迹索引（不包含）
     # 例如：train_traj_start=0, train_traj_end=9 表示绘制第0-8条训练轨迹（共9条）
-    axis_flip = 'x'  # 可选'none'（不翻转）、'x'（翻转x轴）、'y'（翻转y轴）、'xy'（同时翻转x轴和y轴）
+    axis_flip = 'y'  # 可选'none'（不翻转）、'x'（翻转x轴）、'y'（翻转y轴）、'xy'（同时翻转x轴和y轴）
     # =====================
 
     if mode == 'training':
         # ========== 训练模式 ==========
         print("开始训练条件VAE模型...")
         print(f"训练参数：轨迹长度={seq_len}, 潜在维度={latent_dim}, 批大小={batch_size}, 学习率={lr}")
-        print(f"数据格式：时间t + x坐标 + y坐标 (3维)")
-        print(f"条件约束：只考虑起点的x和y坐标")
+        print(f"数据格式：原始数据为时间t + 绝对坐标(x,y) (3维)")
+        print(f"训练时：内部会自动转换为时间t + 相对起点偏移(dx, dy)")
+        print(f"条件约束：使用绝对起点坐标(x_start, y_start)作为条件")
         print(f"时间约束：确保生成的时间从0开始且递增")
         
         # 加载数据
@@ -254,14 +265,25 @@ if __name__ == "__main__":
         for epoch in range(epochs):
             total_loss, total_recon, total_kld, total_start, total_time = 0, 0, 0, 0, 0
             for batch in tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}"):
-                batch = batch.to(device)
-                
-                # 前向传播：编码-解码过程
+                batch = batch.to(device)  # 原始绝对坐标：[t, x, y]
+
+                # ===== 将坐标转换为“相对起点偏移”形式 =====
+                # 提取全局起点坐标 (batch_size, 2)
+                start_points = batch[:, 0, 1:3]  # (x_start, y_start)
+                # 构造相对坐标：dx = x - x_start, dy = y - y_start
+                batch_rel = batch.clone()
+                batch_rel[:, :, 1:3] = batch_rel[:, :, 1:3] - start_points.unsqueeze(1)
+
+                # 前向传播：编码-解码过程（在相对坐标系中）
                 optimizer.zero_grad()
-                recon_batch, mu, logvar, condition = model(batch)
-                
+                recon_batch, mu, logvar, condition = model(batch_rel, start_points)
+
                 # 计算损失：重构损失 + KL散度 + 起点约束 + 时间约束
-                loss, recon_loss, kld, start_loss, time_loss = conditional_vae_loss(recon_batch, batch, mu, logvar, condition, alpha=start_end_weight, time_weight=time_weight)
+                # 注意：此处的x使用的是相对坐标 batch_rel
+                loss, recon_loss, kld, start_loss, time_loss = conditional_vae_loss(
+                    recon_batch, batch_rel, mu, logvar, condition,
+                    alpha=start_end_weight, time_weight=time_weight
+                )
                 
                 # 反向传播和参数更新
                 loss.backward()
