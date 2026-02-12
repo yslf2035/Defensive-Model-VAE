@@ -202,11 +202,11 @@ def conditional_vae_loss(recon_x, x, mu, logvar, condition, alpha=1.0, time_weig
 if __name__ == "__main__":
     # ====== 可修改参数 ======
     mode = 'training'  # 'training', 'visualization'
-    data_path = 'training/DefensiveDataProcessed/trajectory_sce3.npy'  # 轨迹数据集路径，需为numpy数组 (num_samples, seq_len, dim)
-    seq_len = 12                  # 轨迹长度（每条轨迹包含的采样点数量）
+    data_path = 'training/DefensiveDataProcessed/trajectory_sce1_cond.npy'  # 轨迹数据集路径，需为numpy数组 (num_samples, seq_len, dim)
+    seq_len = 10                  # 轨迹长度（每条轨迹包含的采样点数量）
     dim = 3                       # 每个点的维度（3:t,x,y）
     latent_dim = 8                # 潜在空间维度（VAE编码器输出的潜在向量维度）
-    batch_size = 75               # 批大小（每次训练使用的样本数量）: sce1 = 38, sce2 = 16, sce3 = 75, sce4 = 135
+    batch_size = 38               # 批大小（每次训练使用的样本数量）: sce1 = 38, sce2 = 16, sce3 = 66, sce4 = 135
     lr = 1e-3                     # 学习率（优化器更新参数时的步长）
     epochs = 3000                 # 训练轮数
     # device = 'cuda' if torch.cuda.is_available() else 'cpu'  # 设备
@@ -215,6 +215,7 @@ if __name__ == "__main__":
     model_name = model_name.split('.')[0]
     model_name = model_name.replace("trajectory_", "", 1)
     model_save_path = 'training/models/vae_offset_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '.pth'  # 模型保存路径
+    loss_save_path = 'training/loss/vae_offset_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '.png'
 
     # ====== 起点终点控制参数 ======
     # 训练时：始终使用真实数据的起点坐标（推荐）
@@ -305,6 +306,11 @@ if __name__ == "__main__":
             loss_history['kld_loss'].append(total_kld / len(dataset))
             loss_history['start_loss'].append(total_start / len(dataset))
             loss_history['time_loss'].append(total_time / len(dataset))
+
+        # 绘制损失曲线
+        loss_history_1 = {key: values[1:] for key, values in loss_history.items()}
+        epochs_1 = epochs - 1
+        plot_losses(loss_history_1, epochs_1, loss_save_path)
 
         # 保存训练好的模型
         torch.save(model.state_dict(), model_save_path)

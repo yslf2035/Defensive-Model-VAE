@@ -7,19 +7,20 @@ import random
 # ===================== 场景与动作配置 =====================
 SCENE_CONFIG = {
     'StaticBlindTown05': {
-        'start_cond': lambda df: df['ego_y'] >= 40,
+        'start_cond': lambda df: (df['ego_y'] >= 18) & (df['sv2_vx'] != 0) & (df['sv2_vy'] != 0),
         'end_cond': lambda row: row['ego_y'] >= 95
     },
     'DynamicBlindTown05': {
         'start_cond': lambda df: df['sv1_yaw'] < -170,
-        'end_cond': lambda row: row['ego_x'] < -180
+        'end_cond': lambda row: row['ego_x'] < -186
     },
     'PredictableMovementTown05': {
         'start_cond': lambda df: (df['sv1_vx'] != 0) & (df['sv1_vy'] != 0) & (df['ego_y'] <= 40) & (df['ego_y'] != 0),
-        'end_cond': lambda row: row['ego_y'] <= -90
+        'end_cond': lambda row: row['ego_y'] <= -80
     },
     'UnpredictableMovementTown04': {
-        'start_cond': lambda df: (df['sv1_x'] < 9) & (df['sv1_yaw'] > -89),
+        'start_cond': lambda df: ((df['ego_x'] - df['sv1_x']) ** 2 + (df['ego_y'] - df['sv1_y']) ** 2 <= 40 ** 2)
+                                 & (df['sv1_yaw'] >= -89.9),
         'end_cond': lambda row: (row['sv1_x'] > 15) and (row['sv1_yaw'] < -85)
     },
 }
@@ -135,6 +136,8 @@ def collect_trajectories(data_root, scenes, actions, target_points=5, point_mode
                     traj = process_csv(csv_path, scene, action, target_points, point_mode, time_interval)
                     if traj is not None and len(traj) == target_points:
                         all_trajs.append(traj)
+                    else:
+                        print(f"No trajectory found for {scene}, {action}, {fname}")
     return all_trajs
 
 
@@ -154,16 +157,16 @@ if __name__ == "__main__":
     if mode == 'dataset':
         # 数据集模式参数
         data_root = 'DefensiveData'  # 数据根目录
-        scenes = ['DynamicBlindTown05']  # 选择要处理的场景文件夹，可多选
+        scenes = ['UnpredictableMovementTown04']  # 选择要处理的场景文件夹，可多选
         # ['StaticBlindTown05', 'DynamicBlindTown05', 'PredictableMovementTown05', 'UnpredictableMovementTown04']
         actions = ['减速', '转向', '减速+转向']  # 选择要处理的动作文件夹，可多选：'减速'、'减速+转向'、'转向'
         target_points = 10  # 每条轨迹的目标点数
-        time_interval = 0.025  # 时间间隔（秒）
-        # sce1:38条, timetick=0.02s, 目标点数10, 点间隔0.39~2.00s; sce2:16条, timetick=0.025s, 目标点数10, 点间隔0.27~1.34s;
-        # sce3:75条, timetick=0.015s, 目标点数12, 点间隔0.67~1.87s; sce4:135条, timetick=0.02s, 目标点数10, 点间隔0.56~1.84s
+        time_interval = 0.02  # 时间间隔（秒）
+        # sce1:38条, timetick=0.02s, 目标点数10, 点间隔0.52~2.19s; sce2:16条, timetick=0.025s, 目标点数10, 点间隔0.33~1.34s;
+        # sce3:66条, timetick=0.015s, 目标点数10, 点间隔0.78~2.20s; sce4:135条, timetick=0.02s, 目标点数10, 点间隔0.56~1.84s
         point_mode = 'normal'  # 'normal', 'extend_mid'
         if point_mode == 'normal':
-            save_path = 'training/DefensiveDataProcessed/trajectory_sce2.npy'  # 保存的npy文件名
+            save_path = 'training/DefensiveDataProcessed/trajectory_sce4_cond.npy'  # 保存的npy文件名
             trajs = collect_trajectories(data_root, scenes, actions, target_points, point_mode, time_interval)
         elif point_mode == 'extend_mid':
             save_path = 'training/DefensiveDataProcessed/trajectory_sce2_extend1.npy'  # 保存的npy文件名

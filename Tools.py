@@ -82,16 +82,13 @@ def get_start_conditions_from_csv(csv_path, model_name):
         df = pd.read_csv(csv_path)
 
         if "sce1" in model_name:
-            # sce1场景：ego_y >= 40
-            mask = (df['ego_y'] >= 40)
+            mask = (df['ego_y'] >= 18) & (df['sv2_vx'] != 0) & (df['sv2_vy'] != 0)
         elif "sce2" in model_name:
-            # sce2场景：sv1_yaw < -170
             mask = (df['sv1_yaw'] < -170)
         elif "sce4" in model_name:
-            # sce4场景：sv1_x < 9 且 sv1_yaw > -89
-            mask = (df['sv1_x'] < 9) & (df['sv1_yaw'] > -89)
+            mask = (((df['ego_x'] - df['sv1_x']) ** 2 + (df['ego_y'] - df['sv1_y']) ** 2 <= 40 ** 2)
+                    & (df['sv1_yaw'] >= -89.9))
         else:
-            # sce3场景：sv1_vx != 0, sv1_vy != 0, ego_y <= 40, ego_y != 0
             mask = (
                     (df['sv1_vx'] != 0) &
                     (df['sv1_vy'] != 0) &
@@ -154,20 +151,16 @@ def get_human_and_bv_trajectories(csv_path, model_name):
         df = pd.read_csv(csv_path)
         # 定义起点掩码
         if "sce1" in model_name:
-            # sce1场景：ego_y >= 20
-            start_mask = (df['ego_y'] >= 20)
+            start_mask = (df['ego_y'] >= 18) & (df['sv2_vx'] != 0) & (df['sv2_vy'] != 0)
             time_step = 0.02
         elif "sce2" in model_name:
-            # sce2场景：ego_x <= -80
-            start_mask = (df['ego_x'] <= -80)
+            start_mask = (df['sv1_yaw'] < -170)
             time_step = 0.025
         elif "sce4" in model_name:
-            # sce4场景：ego_x < 150
-            start_mask = (df['ego_x'] < 150)
+            start_mask = ((df['ego_x'] - df['sv1_x']) ** 2 + (df['ego_y'] - df['sv1_y']) ** 2 <= 50 ** 2)
             time_step = 0.02
         else:
-            # sce3场景：ego_y <= 60, ego_y != 0
-            start_mask = (df['ego_y'] <= 60) & (df['ego_y'] != 0)
+            start_mask = (df['sv1_vx'] != 0) & (df['sv1_vy'] != 0) & (df['ego_y'] <= 40) & (df['ego_y'] != 0)
             time_step = 0.015
         if not start_mask.any():
             print("警告：未找到满足条件的起始行")
@@ -176,13 +169,13 @@ def get_human_and_bv_trajectories(csv_path, model_name):
         df_copy = df.iloc[start_idx:]
         # 定义终点掩码
         if "sce1" in model_name:
-            end_mask = (df_copy['ego_y'] >= 110)
+            end_mask = (df_copy['ego_y'] >= 95)
         elif "sce2" in model_name:
-            end_mask = (df_copy['ego_x'] < -185)
+            end_mask = (df_copy['ego_x'] < -186)
         elif "sce4" in model_name:
             end_mask = (df_copy['sv1_x'] > 15) & (df_copy['sv1_yaw'] < -85)
         else:
-            end_mask = (df_copy['ego_y'] <= -90)
+            end_mask = (df_copy['ego_y'] <= -80)
         if not end_mask.any():
             print("警告：未找到满足条件的终止行，使用文件末尾行")
             end_idx = len(df) - 1
@@ -328,8 +321,8 @@ def plot_gif_human_vs_model(human_traj, bv1_traj, bv2_traj, model_traj, model_na
         ylim = (20, 100)
         time_step = 0.02
     elif "sce2" in model_name:
-        xlim = (-210, -100)
-        ylim = (-58, 52)
+        xlim = (-200, -100)
+        ylim = (-53, 47)
         time_step = 0.025
     elif "sce4" in model_name:
         xlim = (-45, 65)
@@ -354,19 +347,19 @@ def plot_gif_human_vs_model(human_traj, bv1_traj, bv2_traj, model_traj, model_na
         ax.plot([-193.3] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 中间虚线
         ax.plot([-189.8] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 右侧实线
     elif "sce2" in model_name:
-        # sce2场景：三条车道线，y坐标分别为-5.8、-2.3、1.2，x范围[-177,-110]
-        x_range = np.linspace(-177, -110, 200)
+        # sce2场景：三条车道线，y坐标分别为-5.8、-2.3、1.2，x范围[-177,-50]
+        x_range = np.linspace(-177, -50, 200)
         ax.plot(x_range, [-5.8] * len(x_range), 'k-', linewidth=1.5, alpha=0.7)  # 下方实线
         ax.plot(x_range, [-2.3] * len(x_range), 'k--', linewidth=1.5, alpha=0.7)  # 中间虚线
         ax.plot(x_range, [1.2] * len(x_range), 'k-', linewidth=1.5, alpha=0.7)  # 上方实线
     elif "sce4" in model_name:
-        # sce4场景：五条车道线，x坐标分别为4、7.5、11、14.5、18，y范围[-40,120]
+        # sce4场景：五条车道线，x坐标分别为3.5、7、10.5、14、17.5，y范围[-40,120]
         y_range = np.linspace(-40, 120, 100)
-        ax.plot([4] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 最左边实线
-        ax.plot([7.5] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
-        ax.plot([11] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
-        ax.plot([14.5] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
-        ax.plot([18] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 最右边实线
+        ax.plot([3.5] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 最左边实线
+        ax.plot([7] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
+        ax.plot([10.5] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
+        ax.plot([14] * len(y_range), y_range, 'k--', linewidth=1.5, alpha=0.7)  # 虚线
+        ax.plot([17.5] * len(y_range), y_range, 'k-', linewidth=1.5, alpha=0.7)  # 最右边实线
     else:
         # sce3场景：三条车道线
         y_range = np.linspace(-100, 60, 100)
@@ -497,7 +490,13 @@ def plot_gif_human_vs_model(human_traj, bv1_traj, bv2_traj, model_traj, model_na
                 if human_current_idx < len(human_traj) - 1:
                     human_dx = human_traj[human_current_idx + 1, 0] - human_traj[human_current_idx, 0]
                     human_dy = human_traj[human_current_idx + 1, 1] - human_traj[human_current_idx, 1]
-                    human_yaw = np.arctan2(human_dy, human_dx)
+                    if abs(human_dx) < 1e-3 and abs(human_dy) < 1e-3:
+                        # 静止时使用上一帧的角度
+                        human_dx = human_traj[human_current_idx, 0] - human_traj[human_current_idx - 1, 0]
+                        human_dy = human_traj[human_current_idx, 1] - human_traj[human_current_idx - 1, 1]
+                        human_yaw = np.arctan2(human_dy, human_dx)
+                    else:
+                        human_yaw = np.arctan2(human_dy, human_dx)
                 else:
                     human_dx = human_traj[human_current_idx, 0] - human_traj[human_current_idx - 1, 0]
                     human_dy = human_traj[human_current_idx, 1] - human_traj[human_current_idx - 1, 1]
@@ -544,7 +543,7 @@ def plot_gif_human_vs_model(human_traj, bv1_traj, bv2_traj, model_traj, model_na
                         bv1_dx = bv1_traj[bv1_current_idx + 1, 0] - bv1_traj[bv1_current_idx, 0]
                         bv1_dy = bv1_traj[bv1_current_idx + 1, 1] - bv1_traj[bv1_current_idx, 1]
                         # 检查背景车1是否静止（前后两帧坐标相同）
-                        if abs(bv1_dx) < 1e-6 and abs(bv1_dy) < 1e-6:
+                        if abs(bv1_dx) < 1e-4 and abs(bv1_dy) < 1e-4:
                             bv1_yaw = -90 * math.pi / 180  # 静止时车头朝向-90°
                         else:
                             bv1_yaw = np.arctan2(bv1_dy, bv1_dx)
@@ -552,7 +551,7 @@ def plot_gif_human_vs_model(human_traj, bv1_traj, bv2_traj, model_traj, model_na
                         bv1_dx = bv1_traj[bv1_current_idx, 0] - bv1_traj[bv1_current_idx - 1, 0]
                         bv1_dy = bv1_traj[bv1_current_idx, 1] - bv1_traj[bv1_current_idx - 1, 1]
                         # 检查背景车1是否静止（前后两帧坐标相同）
-                        if abs(bv1_dx) < 1e-6 and abs(bv1_dy) < 1e-6:
+                        if abs(bv1_dx) < 1e-4 and abs(bv1_dy) < 1e-4:
                             bv1_yaw = -90 * math.pi / 180  # 静止时车头朝向-90°
                         else:
                             bv1_yaw = np.arctan2(bv1_dy, bv1_dx)
@@ -584,12 +583,12 @@ def plot_gif_human_vs_model(human_traj, bv1_traj, bv2_traj, model_traj, model_na
                     bv2_dx = bv2_traj[bv2_current_idx, 0] - bv2_traj[bv2_current_idx - 1, 0]
                     bv2_dy = bv2_traj[bv2_current_idx, 1] - bv2_traj[bv2_current_idx - 1, 1]
 
-                if abs(bv2_dx) < 1e-6 and abs(bv2_dy) < 1e-6:
+                if abs(bv2_dx) < 1e-4 and abs(bv2_dy) < 1e-4:
                     # 静止时固定角度
                     if "sce1" in model_name:
                         bv2_yaw = -175 * math.pi / 180
                     elif "sce2" in model_name:
-                        bv2_yaw = -45 * math.pi / 180
+                        bv2_yaw = 135 * math.pi / 180
                     else:
                         bv2_yaw = -90 * math.pi / 180
                 else:
@@ -658,6 +657,93 @@ def save_animation_as_gif(animation, fig, output_path, fps=100):
 
     except Exception as e:
         print(f"保存GIF失败：{e}")
+
+
+def plot_losses(loss_history, epochs, save_path="training/loss/loss.png"):
+    """
+    绘制训练损失曲线：左侧为 total_loss 单独图，右侧为其余 4 种 loss 合并在一张图。
+    所有文字使用 Times New Roman 字体。
+
+    Parameters:
+    -----------
+    loss_history : dict of lists
+        键包括 'total_loss', 'recon_loss', 'kld_loss', 'start_loss', 'time_loss'
+        每个值为长度为 `epochs` 的 list，记录每 epoch 的平均损失
+    epochs : int
+        总训练轮数（即横坐标最大值，也用于验证数据长度）
+    save_path : str
+        保存路径（含文件名），默认 "training/loss/loss.png"
+    """
+    # 验证输入长度一致性
+    expected_len = epochs
+    for key, values in loss_history.items():
+        if len(values) != expected_len:
+            raise ValueError(f"Length of loss_history['{key}'] ({len(values)}) does not match epochs ({expected_len})")
+
+    # === 设置 Times New Roman 全局字体 ===
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "Times", "DejaVu Serif", "Bitstream Vera Serif", "Computer Modern Serif"],
+        "axes.titlesize": 16,
+        "axes.labelsize": 14,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "legend.fontsize": 12,
+        "figure.titlesize": 16,
+    })
+
+    # 创建保存目录（若不存在）
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    # 横坐标：epoch 从 1 开始
+    x_epochs = list(range(1, epochs + 1))
+
+    # 定义颜色（确保 total_loss 在左图仍用蓝色；右图 4 种 loss 各用高对比色）
+    colors = {
+        'total_loss':   'tab:blue',
+        'recon_loss':   '#1f77b4',  # muted blue
+        'kld_loss':     '#ff7f0e',  # orange
+        'start_loss':   '#2ca02c',  # green
+        'time_loss':    '#d62728',  # red
+    }
+    labels = {
+        'total_loss':   'Total Loss',
+        'recon_loss':   'Reconstruction Loss',
+        'kld_loss':     'KLD Loss',
+        'start_loss':   'Start Loss',
+        'time_loss':    'Time Loss',
+    }
+
+    # 创建双子图（1行2列）
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), constrained_layout=True)
+
+    # --- 左图：total_loss 单独绘制 ---
+    ax1.plot(x_epochs, loss_history['total_loss'],
+             color=colors['total_loss'], label=labels['total_loss'], linewidth=2.0)
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Total Loss', fontweight='bold')
+    ax1.grid(True, linestyle='--', alpha=0.7)
+    ax1.legend(loc='upper right')
+
+    # --- 右图：其余 4 种 loss 合并绘制 ---
+    for key in ['recon_loss', 'kld_loss', 'start_loss', 'time_loss']:
+        ax2.plot(x_epochs, loss_history[key],
+                 color=colors[key], label=labels[key], linewidth=1.8)
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Loss')
+    ax2.set_title('Component Losses', fontweight='bold')
+    ax2.grid(True, linestyle='--', alpha=0.7)
+    ax2.legend(loc='upper right', bbox_to_anchor=(0.98, 0.98))  # 右上角内嵌，避免裁剪
+
+    # 统一主标题（可选，注释掉则无）
+    # fig.suptitle('Training Loss Breakdown', fontweight='bold', fontsize=18)
+
+    # 保存 & 清理
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+    print(f"Loss plots saved to: {save_path}")
 
 
 # ===================== 样条曲线函数 =====================

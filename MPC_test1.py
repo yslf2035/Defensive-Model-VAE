@@ -7,7 +7,7 @@ from Tools import *
 # VAE模型生成轨迹的MPC跟踪测试
 # 模型参数
 model_path = 'training/models/vae_offset_sce3_ld8_epoch3000.pth'  # 模型文件路径
-seq_len = 12                  # 轨迹长度（sce3=12，其他=10）
+seq_len = 10                  # 轨迹长度（sce3=12，其他=10）
 dim = 3                       # 每个点的维度
 latent_dim = 8                # 潜在空间维度
 device = 'cpu'                # 计算设备

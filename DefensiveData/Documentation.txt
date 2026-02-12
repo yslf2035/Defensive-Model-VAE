@@ -1,0 +1,30 @@
+逻辑场景：
+StaticBlindTown05 -- 静态盲区场景
+DynamicBlindTown05 -- 动态盲区场景
+PredictableMovementTown05 -- 可预见运动不确定性场景
+UnpredictableMovementTown04 -- 不可预见运动不确定性场景
+
+csv命名格式：
+exp_被试者序号_control_逻辑场景名称_第X次测试.csv
+例：exp_1_control_StaticBlindTown05_1.csv -- 1号被试者静态盲区场景第1次测试
+
+csv内部变量说明：
+frame       时间帧(s)
+id	        车辆编号
+throttle	加速踏板踩踏幅度
+steer	        方向盘转角
+brake	制动踏板踩踏幅度
+ego_x	主车x坐标
+ego_y	主车y坐标
+ego_vx	主车x方向速度
+ego_vy	主车y方向速度
+ego_ax	主车x方向加速度
+ego_ay	主车y方向加速度
+ego_yaw	主车航向角(rad)
+svN_x	第N号环境车x坐标（N=1,2,3,…）
+svN_y	第N号环境车y坐标（N=1,2,3,…）
+svN_vx	第N号环境车x方向速度（N=1,2,3,…）
+svN_vy	第N号环境车y方向速度（N=1,2,3,…）
+svN _ax	第N号环境车x方向加速度（N=1,2,3,…）
+svN _ay	第N号环境车y方向加速度（N=1,2,3,…）
+svN _yaw	第N号环境车航向角（N=1,2,3,…）

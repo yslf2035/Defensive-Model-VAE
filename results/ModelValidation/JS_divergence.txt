@@ -1,0 +1,40 @@
+sce1:
+Velocity Jensen-Shannon Divergence: 0.092139
+Velocity Jensen-Shannon Divergence: 0.131582 (range=[0,1])
+RMSE_frequency: 14.45 (old method)
+RMSE_frequency: 2.440675 (new method)
+Surface RMSE: 2.96752272 (include zero points)
+Surface RMSE: 3.45551705 (not include zero points)
+0211:
+Surface RMSE: 2.22687781 (include zero points)
+Surface RMSE: 2.36965596 (not include zero points)
+
+sce2:
+Velocity Jensen-Shannon Divergence: 0.112286 (range=[0,1])
+RMSE_frequency: 1.685821 (new method)
+Surface RMSE: 1.91962820 (include zero points)
+Surface RMSE: 2.39953525 (not include zero points)
+0211:
+Surface RMSE: 1.41293849 (include zero points)
+Surface RMSE: 1.55854868 (not include zero points)
+
+sce3:
+Velocity Jensen-Shannon Divergence: 0.093361
+Velocity Jensen-Shannon Divergence: 0.134692 (range=[0,1])
+Velocity Jensen-Shannon Divergence: 0.127377 (range=[0,1] & sample number=66)
+RMSE_frequency: 6.012807 (old method)
+RMSE_frequency: 6.838131 (new method)
+Surface RMSE: 3.40564864 (include zero points)
+Surface RMSE: 4.41279122 (not include zero points)
+0211:
+Surface RMSE: 2.89808723 (include zero points)
+Surface RMSE: 3.28143761 (not include zero points)
+
+sce4:
+Velocity Jensen-Shannon Divergence: 0.041909 (range=[0,1])
+RMSE_frequency: 9.168905 (new method)
+Surface RMSE: 4.62778951 (include zero points)
+Surface RMSE: 5.63276601 (not include zero points)
+0211:
+Surface RMSE: 3.89329095 (include zero points)
+Surface RMSE: 4.17855121 (not include zero points)

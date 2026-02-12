@@ -7,13 +7,13 @@ from Tools import plot_gif_human_vs_model, save_animation_as_gif, process_model_
 
 # 完整轨迹：潜在风险点前人类轨迹 + 潜在风险点后VAE模型生成轨迹
 # 模型参数
-model_path = 'training/models/vae_offset_sce3_ld8_epoch3000.pth'  # 模型文件路径
-seq_len = 12                  # 轨迹长度（sce3=12，其他=10）
+model_path = 'training/models/vae_offset_sce4_cond_ld8_epoch3000.pth'  # 模型文件路径
+seq_len = 10                  # 轨迹长度（seq_len=10）
 dim = 3                       # 每个点的维度
 latent_dim = 8                # 潜在空间维度
 device = 'cpu'                # 计算设备
 # CSV文件路径
-csv_path = 'DefensiveData/PredictableMovementTown05/减速/exp_8_control_PredictableMovementTown05_2.csv'
+csv_path = 'DefensiveData/UnpredictableMovementTown04/减速/exp_69_control_UnpredictableMovementTown04_2.csv'
 
 model_name = os.path.basename(model_path)
 csv_name = os.path.basename(csv_path)
@@ -69,12 +69,12 @@ model_name_parts = model_name.split('_')
 csv_name_parts = csv_name.split('_')
 
 # 绘制结果
-pic_output_path = ("MPC/pics/vae_" + model_name_parts[2] + "_exp" + csv_name_parts[1] + "_" +
+pic_output_path = ("MPC/pics/vae_" + model_name_parts[2] + "_cond_exp" + csv_name_parts[1] + "_" +
                    csv_name_parts[-1].split('.')[0] + ".png")
 tracker.plot_results(pic_output_path, 'y')  # sce1,sce2-->'x',sce3,sce4-->'y'
 
 # 绘制gif
-output_filename = ('animation_' + model_name_parts[2] + '_' + csv_name_parts[1] + '_' +
+output_filename = ('animation_' + model_name_parts[2] + '_cond_' + csv_name_parts[1] + '_' +
                    csv_name_parts[-1].split('.')[0] + '.gif')  # 输出文件名
 output_path = f'MPC/gifs/{output_filename}'  # 输出路径
 print("创建gif...")
@@ -82,3 +82,40 @@ animation, fig = plot_gif_human_vs_model(human_trajectory, bv1_trajectory, bv2_t
 fps = 1 / time_step  # 帧/秒
 save_animation_as_gif(animation, fig, output_path, fps)
 print("轨迹动图生成完成！")
+
+###############
+# 相同场景重复实验
+vae_trajectories = []
+for i in range(10):
+    # VAE模型生成轨迹点 [x, y, t]
+    waypoints = load_model_and_generate_trajectory(model_path, start_x, start_y, seq_len, dim, latent_dim, device)
+    waypoints = waypoints[:, [1, 2, 0]]
+    waypoints[0, 2] = 0.0
+
+    # 初始状态 [x, y, theta, vx, vy]
+    initial_state = np.array([start_x, start_y, start_angle, start_vx, start_vy])
+
+    # 创建路径跟踪器
+    tracker = PathTracker(
+        waypoints=waypoints,
+        initial_state=initial_state,
+        wheelbase=2.8,  # 轴距
+        prediction_horizon=30,  # MPC预测时域
+        control_horizon=20,  # MPC控制时域
+        dt=time_step  # 时间步长
+    )
+
+    total_time = waypoints[-1, -1]
+    # 运行仿真
+    times, states, controls = tracker.run_simulation(total_time=total_time)
+    # MPC跟踪后的模型生成轨迹
+    vae_trajectory = process_model_trajectory(human_trajectory, start_x, start_y, states, time_step)
+    vae_trajectories.append(vae_trajectory)
+
+    model_name_parts = model_name.split('_')
+    csv_name_parts = csv_name.split('_')
+
+    # 绘制结果
+    pic_output_path = ("MPC/pics/vae_" + model_name_parts[2] + "_cond_exp" + csv_name_parts[1] + "_" +
+                       csv_name_parts[-1].split('.')[0] + "_" + str(i) + ".png")
+    tracker.plot_results(pic_output_path, 'y')  # sce1,sce2-->'x',sce3,sce4-->'y'

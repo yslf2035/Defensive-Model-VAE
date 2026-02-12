@@ -11,6 +11,7 @@ from Tools import get_start_conditions_from_csv, load_model_and_generate_traject
 import math
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.stats import entropy
+from Spatial_Distribution import *
 
 # 全局字体配置
 plt.rcParams['font.family'] = 'Times New Roman'
@@ -29,8 +30,8 @@ def collect_csv_files(base_folder):
         csv_files: CSV文件路径列表
     """
     csv_files = []
-    # subfolders = ['减速', '减速+转向', '转向']
-    subfolders = ['减速+转向']
+    subfolders = ['减速', '减速+转向', '转向']
+    # subfolders = ['减速+转向']
 
     for subfolder in subfolders:
         folder_path = os.path.join(base_folder, subfolder)
@@ -289,131 +290,6 @@ def calculate_human_velocities(human_trajectories):
     return np.array(velocities)
 
 
-def extract_coordinates_from_trajectories(trajectories):
-    """
-    从轨迹状态序列中提取所有(x, y)坐标点
-    
-    Args:
-        trajectories: 轨迹列表，每个元素是 [N, 4] 的状态序列 [x, y, theta, v]
-        
-    Returns:
-        coordinates: 所有坐标点 [M, 2] - [x, y]
-    """
-    coordinates = []
-    for traj in trajectories:
-        # 状态序列的前两列是x和y坐标
-        xy = traj[:, [0, 1]]
-        coordinates.append(xy)
-    return np.vstack(coordinates)
-
-
-def extract_human_coordinates(human_trajectories):
-    """
-    从人类轨迹数据中提取所有(x, y)坐标点
-    
-    Args:
-        human_trajectories: 轨迹数组 (num_samples, target_points, 3) - [时间, x, y]
-        
-    Returns:
-        coordinates: 所有坐标点 [M, 2] - [x, y]
-    """
-    coordinates = []
-    for traj in human_trajectories:
-        # traj shape: [x, y, t]
-        xy = traj[:, [0, 1]]  # 提取x和y坐标
-        coordinates.append(xy)
-    return np.vstack(coordinates)
-
-
-def plot_spatial_distribution(coordinates, title, model_name, save_path=None, grid_size=1.0,
-                              cmap=None, vmin=None, vmax=None):
-    """
-    绘制坐标在xOy坐标系中的分布热力图（1m×1m方格）
-    
-    Args:
-        coordinates: 坐标点数组 [N, 2] - [x, y]
-        title: 图标题
-        model_name: 模型名称
-        save_path: 保存路径（可选）
-        grid_size: 网格大小（米），默认1.0m
-        cmap: 可选的自定义颜色映射
-        vmin: 可选的颜色归一化范围
-        vmax: 可选的颜色归一化范围
-    """
-    if len(coordinates) == 0:
-        print(f"Warning: No coordinates to plot for {title}")
-        return
-    
-    # 坐标范围
-    if "sce1" in model_name:
-        x_edges = np.arange(-210, -180, grid_size)
-        y_edges = np.arange(20, 100, grid_size)
-    elif "sce3" in model_name:
-        x_edges = np.arange(140, 170, grid_size)
-        y_edges = np.arange(-80, 40, grid_size)
-    else:
-        x_edges = np.arange(-50, 50, grid_size)
-        y_edges = np.arange(-50, 50, grid_size)
-
-    # 计算每个网格内的点数
-    H, x_edges, y_edges = np.histogram2d(
-        coordinates[:, 0], coordinates[:, 1],
-        bins=[x_edges, y_edges]
-    )
-    
-    # 转置以便正确显示（histogram2d返回的矩阵需要转置）
-    H = H.T
-    
-    # 创建图形
-    fig, ax = plt.subplots(figsize=(10, 8))
-    
-    # 绘制热力图（使用pcolormesh以更精确地显示1m×1m网格）
-    im = ax.pcolormesh(
-        x_edges, y_edges, H,
-        cmap=(cmap if cmap is not None else LinearSegmentedColormap.from_list(
-            'sky_to_darkred', ['#87CEEB', '#FFA07A', '#FF4500', '#8B0000'])
-        ),
-        vmin=vmin, vmax=vmax,
-        shading='flat',
-        edgecolors='none'
-    )
-    
-    # 添加颜色条
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Number of Points', fontsize=12)
-    
-    # 设置标签和标题
-    ax.set_xlabel('X (m)', fontsize=14)
-    ax.set_ylabel('Y (m)', fontsize=14)
-    ax.set_title(title, fontsize=16)
-    if "sce1" in model_name or "sce2" in model_name:
-        ax.invert_xaxis()
-    elif "sce3" in model_name or "sce4" in model_name:
-        ax.invert_yaxis()
-    
-    # 添加网格线（可选，显示1m×1m方格边界）
-    ax.grid(True, alpha=0.8, linestyle='--', linewidth=0.5)
-    
-    # 添加统计信息
-    total_points = len(coordinates)
-    max_count = np.max(H)
-    stats_text = f'Total points: {total_points}\nMax count per grid: {int(max_count)}'
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-            fontsize=10, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight',
-                   facecolor='white', edgecolor='none')
-        print(f"Spatial distribution plot saved to: {save_path}")
-    
-    # plt.show()
-    
-    return x_edges, y_edges
-
-
 def plot_velocity_distribution(generated_velocities, human_velocities, save_path=None):
     """
     绘制速度分布对比图
@@ -441,13 +317,14 @@ def plot_velocity_distribution(generated_velocities, human_velocities, save_path
     M = 0.5 * (hist_gen + hist_human)
     
     # 计算JS散度 = 0.5 * (KL(P||M) + KL(Q||M))
+    # 使用base=2的对数，使JS散度范围在[0,1]
     # 添加小的epsilon避免log(0)
     epsilon = 1e-10
-    kl_pm = entropy(hist_gen + epsilon, M + epsilon)
-    kl_qm = entropy(hist_human + epsilon, M + epsilon)
+    kl_pm = entropy(hist_gen + epsilon, M + epsilon, base=2)
+    kl_qm = entropy(hist_human + epsilon, M + epsilon, base=2)
     js_divergence = 0.5 * (kl_pm + kl_qm)
     
-    print(f"\nVelocity Jensen-Shannon Divergence: {js_divergence:.6f}")
+    print(f"\nVelocity Jensen-Shannon Divergence: {js_divergence:.6f} (range: [0, 1])")
     
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
@@ -510,24 +387,24 @@ def main():
     
     # 配置参数
     base_folder = 'DefensiveData/PredictableMovementTown05'
-    model_path = 'training/models/vae_offset_sce3_ld8_epoch3000.pth'
+    model_path = 'training/models/vae_offset_sce3_cond_ld8_epoch3000.pth'
     model_name = os.path.basename(model_path)
     model_name_parts = model_name.split('_')
-    seq_len = 12  # sce3=12, 其他=10
+    seq_len = 10  # seq_len=10
     dim = 3
     latent_dim = 8
     device = 'cpu'
     human_trajectory_path = 'training/DefensiveDataProcessed/trajectory_' + model_name_parts[2] + '.npy'
     
-    # 收集所有CSV文件
-    print("\n[Step 1] Collecting CSV files...")
-    csv_files = collect_csv_files(base_folder)
-
-    # 批量处理轨迹生成和MPC跟踪（每条轨迹会自动保存为单独的npy文件）
-    print("\n[Step 2] Batch processing trajectories...")
-    all_trajectories, all_times, saved_files = batch_process_trajectories(
-        csv_files, model_path, seq_len, dim, latent_dim, device
-    )
+    # # 收集所有CSV文件
+    # print("\n[Step 1] Collecting CSV files...")
+    # csv_files = collect_csv_files(base_folder)
+    #
+    # # 批量处理轨迹生成和MPC跟踪（每条轨迹会自动保存为单独的npy文件）
+    # print("\n[Step 2] Batch processing trajectories...")
+    # all_trajectories, all_times, saved_files = batch_process_trajectories(
+    #     csv_files, model_path, seq_len, dim, latent_dim, device
+    # )
 
     # 已保存模型生成轨迹数据npy文件时启用
     # # sce1
@@ -551,6 +428,44 @@ def main():
     #                "results/GeneratedData/tracked_trajectory_sce3_exp58_1.npy",
     #                "results/GeneratedData/tracked_trajectory_sce3_exp62_3.npy"]
 
+    # 已保存模型生成轨迹数据npy文件时启用
+    csv_folders = [
+        "DefensiveData/PredictableMovementTown05/减速/",
+        "DefensiveData/PredictableMovementTown05/转向/",
+        "DefensiveData/PredictableMovementTown05/减速+转向/"
+    ]
+    csv_files = []
+    # 遍历每个目标文件夹
+    for folder_path in csv_folders:
+        # 检查文件夹是否存在
+        if os.path.isdir(folder_path):
+            # 遍历文件夹内所有文件/文件夹
+            for filename in os.listdir(folder_path):
+                # 筛选出.csv后缀的文件
+                if filename.lower().endswith(".csv"):  # lower()避免大小写问题（如.CSV）
+                    # 拼接完整路径
+                    full_path = os.path.join(folder_path, filename)
+                    # 替换Windows下的\为/（保证路径格式和示例一致）
+                    full_path = full_path.replace("\\", "/")
+                    csv_files.append(full_path)
+        else:
+            print(f"警告：文件夹 {folder_path} 不存在或不是有效目录")
+
+    saved_folder = "results/GeneratedData/"
+    saved_files = []
+    # 检查文件夹是否存在
+    if os.path.isdir(saved_folder):
+        # 遍历文件夹内所有文件
+        for filename in os.listdir(saved_folder):
+            # 筛选条件：文件名包含"sceX" + 后缀是.npy
+            if "sce3" in filename and filename.lower().endswith(".npy"):
+                # 拼接完整路径并统一分隔符为/
+                full_path = os.path.join(saved_folder, filename)
+                full_path = full_path.replace("\\", "/")
+                saved_files.append(full_path)
+    else:
+        print(f"警告：文件夹 {saved_folder} 不存在或不是有效目录")
+
     # 从保存的npy文件中加载轨迹数据
     print("\n[Step 3] Loading tracked trajectories from saved files...")
     loaded_trajectories = load_tracked_trajectories_from_files(saved_files)
@@ -573,7 +488,7 @@ def main():
     # 绘制速度分布对比图
     print("\n[Step 6] Plotting velocity distribution...")
     plot_save_path = 'results/ModelValidation/velocity_distribution_comparison_' + model_name_parts[2] + '.png'
-    plot_velocity_distribution(generated_velocities, human_velocities, plot_save_path)
+    # plot_velocity_distribution(generated_velocities, human_velocities, plot_save_path)
     
     # 提取坐标点并绘制空间分布热力图
     print("\n[Step 7] Extracting coordinates and plotting spatial distribution...")
@@ -590,32 +505,161 @@ def main():
     grid_size = 0.5
     # 自定义颜色映射：值小为天蓝色，值大为深红色
     custom_cmap = LinearSegmentedColormap.from_list(
-        'sky_to_darkred', ['#87CEEB', '#ADD8E6', '#FFA07A', '#FF4500', '#8B0000']
-    )
-
-    # 绘制生成轨迹的空间分布
-    print("\nPlotting generated trajectories spatial distribution...")
-    gen_spatial_save_path = 'results/ModelValidation/generated_trajectories_spatial_distribution_' + model_name_parts[2] + '.png'
-    _ = plot_spatial_distribution(
-        generated_coordinates,
-        'Model Trajectories Spatial Distribution',
-        model_name,
-        gen_spatial_save_path,
-        grid_size=grid_size,
-        cmap=custom_cmap
+        'sky_to_darkred', ['#87CEEB', '#D4E8F0', '#FFFFE0', '#FFD260', '#FF6E30', '#F04228', '#CD2626']
     )
     
-    # 绘制人类轨迹的空间分布
-    print("\nPlotting human trajectories spatial distribution...")
-    human_spatial_save_path = 'results/ModelValidation/human_trajectories_spatial_distribution_' + model_name_parts[2] + '.png'
-    _ = plot_spatial_distribution(
-        human_coordinates,
-        'Human Trajectories Spatial Distribution',
-        model_name,
-        human_spatial_save_path,
-        grid_size=grid_size,
-        cmap=custom_cmap
+    # # ========== 统计轨迹在方格中所占频次 ==========
+    # # 计算统一的colorbar范围
+    # print("\nCalculating unified colorbar range...")
+    # vmin, vmax = calculate_unified_colorbar_range(
+    #     [generated_coordinates, human_coordinates],
+    #     model_name,
+    #     grid_size=grid_size
+    # )
+    # print(f"Unified colorbar range: [{vmin:.0f}, {vmax:.0f}]")
+    #
+    # # 计算空间分布的RMSE_frequency差异指标
+    # print("\nCalculating spatial distribution RMSE_frequency...")
+    # rmse_frequency = calculate_rmse_frequency(
+    #     generated_coordinates,
+    #     human_coordinates,
+    #     model_name,
+    #     grid_size=grid_size
+    # )
+    #
+    # # 绘制生成轨迹的空间分布
+    # print("\nPlotting generated trajectories spatial distribution...")
+    # gen_spatial_save_path = 'results/ModelValidation/generated_trajectories_spatial_distribution_' + model_name_parts[2] + '.png'
+    # _ = plot_spatial_distribution(
+    #     generated_coordinates,
+    #     'Model Trajectories Spatial Distribution',
+    #     model_name,
+    #     gen_spatial_save_path,
+    #     grid_size=grid_size,
+    #     cmap=custom_cmap,
+    #     vmin=vmin,
+    #     vmax=vmax
+    # )
+    #
+    # # 绘制人类轨迹的空间分布
+    # print("\nPlotting human trajectories spatial distribution...")
+    # human_spatial_save_path = 'results/ModelValidation/human_trajectories_spatial_distribution_' + model_name_parts[2] + '.png'
+    # _ = plot_spatial_distribution(
+    #     human_coordinates,
+    #     'Human Trajectories Spatial Distribution',
+    #     model_name,
+    #     human_spatial_save_path,
+    #     grid_size=grid_size,
+    #     cmap=custom_cmap,
+    #     vmin=vmin,
+    #     vmax=vmax
+    # )
+    
+    # # ========== 新统计方式：按轨迹统计（每条轨迹经过某个方格只计数1次） ==========
+    # print("\n[Step 8] Processing spatial distribution with new method (trajectory-based counting)...")
+    #
+    # # 计算统一的colorbar范围（新统计方式）
+    # print("\nCalculating unified colorbar range (new method)...")
+    # vmin_new, vmax_new = calculate_unified_colorbar_range_new(
+    #     [loaded_trajectories, human_trajectories],
+    #     model_name,
+    #     grid_size=grid_size
+    # )
+    # print(f"Unified colorbar range (new method): [{vmin_new:.0f}, {vmax_new:.0f}]")
+    #
+    # # 计算空间分布的RMSE_frequency差异指标（新统计方式）
+    # print("\nCalculating spatial distribution RMSE_frequency (new method)...")
+    # rmse_frequency_new = calculate_rmse_frequency_new(
+    #     loaded_trajectories,
+    #     human_trajectories,
+    #     model_name,
+    #     grid_size=grid_size
+    # )
+    #
+    # # 绘制生成轨迹的空间分布（新统计方式）
+    # print("\nPlotting generated trajectories spatial distribution (new method)...")
+    # gen_spatial_save_path_new = 'results/ModelValidation/generated_trajectories_spatial_distribution_new_' + model_name_parts[2] + '.png'
+    # _ = plot_spatial_distribution_new(
+    #     loaded_trajectories,
+    #     'Model Trajectories Spatial Distribution (Trajectory-based)',
+    #     model_name,
+    #     gen_spatial_save_path_new,
+    #     grid_size=grid_size,
+    #     cmap=custom_cmap,
+    #     vmin=vmin_new,
+    #     vmax=vmax_new
+    # )
+    #
+    # # 绘制人类轨迹的空间分布（新统计方式）
+    # print("\nPlotting human trajectories spatial distribution (new method)...")
+    # human_spatial_save_path_new = 'results/ModelValidation/human_trajectories_spatial_distribution_new_' + model_name_parts[2] + '.png'
+    # _ = plot_spatial_distribution_new(
+    #     human_trajectories,
+    #     'Human Trajectories Spatial Distribution (Trajectory-based)',
+    #     model_name,
+    #     human_spatial_save_path_new,
+    #     grid_size=grid_size,
+    #     cmap=custom_cmap,
+    #     vmin=vmin_new,
+    #     vmax=vmax_new
+    # )
+
+    # ========== 新增：绘制模型/人类轨迹的三维坐标-时间-速度图 ==========
+    print("\n[Step 9] Plotting 3D space-time-velocity figures...")
+    axis = "y"
+    model_stv_lines_path = 'results/ModelValidation/model_space_time_velocity_lines_' + model_name_parts[2] + '.png'
+    model_stv_surface_path = 'results/ModelValidation/model_space_time_velocity_projection_' + model_name_parts[2] + '.png'
+    human_stv_lines_path = 'results/ModelValidation/human_space_time_velocity_lines_' + model_name_parts[2] + '.png'
+    human_stv_surface_path = 'results/ModelValidation/human_space_time_velocity_projection_' + model_name_parts[2] + '.png'
+
+    # 准备数据以计算统一的坐标轴范围和速度范围
+    from Spatial_Distribution import _prepare_model_stv_data, _prepare_human_stv_data, _calculate_unified_axes_ranges, _calculate_max_velocity_from_trajectories
+    
+    model_coords_list, model_times_list, model_v_list = _prepare_model_stv_data(loaded_trajectories, model_name, axis=axis)
+    human_coords_list, human_times_list, human_v_list = _prepare_human_stv_data(human_trajectories, axis=axis)
+    
+    # 计算统一的坐标轴范围
+    coord_range, time_range = _calculate_unified_axes_ranges(
+        model_coords_list, model_times_list,
+        human_coords_list, human_times_list
     )
+    
+    # 计算统一的速度范围：vmin=0，vmax从轨迹中获取最大速度
+    vmin = 0.0
+    vmax = _calculate_max_velocity_from_trajectories(model_v_list, human_v_list)
+    
+    # 绘制模型轨迹
+    model_v_surface = plot_space_time_velocity_model(
+        loaded_trajectories,
+        model_name,
+        axis=axis,
+        save_path_lines=model_stv_lines_path,
+        save_path_surface=model_stv_surface_path,
+        num_coord_bins=40,
+        num_time_bins=40,
+        coord_range=coord_range,
+        time_range=time_range,
+        vmin=vmin,
+        vmax=vmax
+    )
+    
+    # 绘制人类轨迹
+    human_v_surface = plot_space_time_velocity_human(
+        human_trajectories,
+        model_name,
+        axis=axis,
+        save_path_lines=human_stv_lines_path,
+        save_path_surface=human_stv_surface_path,
+        num_coord_bins=40,
+        num_time_bins=40,
+        coord_range=coord_range,
+        time_range=time_range,
+        vmin=vmin,
+        vmax=vmax
+    )
+
+    calculate_surface_rmse(model_v_surface, human_v_surface, include_zero_velocity=True)
+    calculate_surface_rmse(model_v_surface, human_v_surface, include_zero_velocity=False)
     
     print("\n" + "=" * 60)
     print("Processing completed!")

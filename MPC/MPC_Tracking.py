@@ -105,6 +105,10 @@ class PathInterpolator:
         t = self.waypoints[:, 2]
         x = self.waypoints[:, 0]
         y = self.waypoints[:, 1]
+
+        # 记录时间范围
+        self.t_start = float(t[0])
+        self.t_end = float(t[-1])
         
         # 检查数据有效性
         if len(t) < 2:
@@ -184,6 +188,38 @@ class PathInterpolator:
             # 只有一个点，创建常值插值
             self.vx_interp = lambda t_val: 0.0
             self.vy_interp = lambda t_val: 0.0
+
+        # 记录终点位置和终点速度，用于终点之后的匀速直行外推
+        # 终点位置
+        self.end_x = float(self.x_interp(self.t_end))
+        self.end_y = float(self.y_interp(self.t_end))
+
+        # 起点速度
+        self.start_vx = float(self.vx_interp(self.t_start))
+        self.start_vy = float(self.vy_interp(self.t_start))
+        # 起点航向角
+        start_theta = float(np.arctan2(self.start_vy, self.start_vx))
+        self.start_theta = start_theta if start_theta >= -2.8 else start_theta + 2 * np.pi
+        # 终点速度
+        t_step = 0.001
+        self.end_vx = None
+        self.end_vy = None
+        for t1 in np.arange(0, t[-1] + t_step, t_step):
+            vx_t1 = float(self.vx_interp(t1))
+            vy_t1 = float(self.vy_interp(t1))
+            theta_t1 = float(np.arctan2(vy_t1, vx_t1))
+            theta_t1 = theta_t1 if theta_t1 >= -2.8 else theta_t1 + 2 * np.pi
+            if abs(theta_t1 - self.start_theta) > 45 * np.pi / 180:
+                self.end_vx = float(self.vx_interp((t[-1] + t[-2]) / 2))
+                self.end_vy = float(self.vy_interp((t[-1] + t[-2]) / 2))
+                break
+        if self.end_vx is None or self.end_vy is None:
+            self.end_vx = float(self.vx_interp(self.t_end))
+            self.end_vy = float(self.vy_interp(self.t_end))
+        # 终点航向角
+        end_theta = float(np.arctan2(self.end_vy, self.end_vx))
+        self.end_theta = end_theta if end_theta >= -2.8 else end_theta + 2 * np.pi
+        # print(self.end_theta)
     
     def get_reference(self, t: float) -> Tuple[float, float, float, float]:
         """
@@ -195,17 +231,50 @@ class PathInterpolator:
         Returns:
             (x_ref, y_ref, vx_ref, vy_ref)
         """
-        x_ref = float(self.x_interp(t))
-        y_ref = float(self.y_interp(t))
-        vx_ref = float(self.vx_interp(t))
-        vy_ref = float(self.vy_interp(t))
+        # 终点之前：使用插值
+        if t <= self.t_end:
+            x_ref = float(self.x_interp(t))
+            y_ref = float(self.y_interp(t))
+            vx_ref = float(self.vx_interp(t))
+            vy_ref = float(self.vy_interp(t))
+            theta_ref = float(np.arctan2(vy_ref, vx_ref))
+            if abs(theta_ref - self.start_theta) > 90 * np.pi / 180:
+                vx_ref = self.end_vx
+                vy_ref = self.end_vy
+        else:
+            # 终点之后：沿终点速度方向做匀速直线外推
+            dt_extra = t - self.t_end
+            x_ref = self.end_x + self.end_vx * dt_extra
+            y_ref = self.end_y + self.end_vy * dt_extra
+            vx_ref = self.end_vx
+            vy_ref = self.end_vy
         
         return x_ref, y_ref, vx_ref, vy_ref
     
     def get_reference_heading(self, t: float) -> float:
-        """获取参考航向角"""
-        vx_ref, vy_ref = self.get_reference(t)[2:4]
-        return np.arctan2(vy_ref, vx_ref)
+        """
+        获取参考航向角
+        
+        Args:
+            t: 时间
+            
+        Returns:
+            参考航向角（弧度）
+        """
+        if t > self.t_end:
+            # 终点之后：保持终点时刻的航向角不变
+            theta = self.end_theta
+        else:
+            # 终点之前：根据参考速度计算航向角
+            vx_ref, vy_ref = self.get_reference(t)[2:4]
+            theta = np.arctan2(vy_ref, vx_ref)
+        
+        # 将航向角规范化到 [0, 2π) 范围
+        theta_ref = theta if theta >= -2.8 else theta + 2 * np.pi
+        # 检查
+        if abs(theta_ref - self.start_theta) > 90 * np.pi / 180:
+            print(f"参考线航向角计算出错：{np.degrees(theta_ref):.2f}°")
+        return theta_ref
 
 
 class MPCController:
@@ -363,6 +432,8 @@ class PathTracker:
             control_horizon: MPC控制时域
             dt: 时间步长
         """
+        if initial_state[2] < -2.8:
+            initial_state[2] = initial_state[2] + 2 * np.pi
         initial_state_copy = initial_state.copy()
         initial_state_copy[-2:] = np.sqrt(np.sum(initial_state_copy[-2:] ** 2))
         initial_state_copy = initial_state_copy[:-1]
@@ -392,11 +463,18 @@ class PathTracker:
         """
         # 生成参考轨迹（仅航向角与速度）
         ref_trajectory = np.zeros((self.mpc.prediction_horizon + 1, 2))
+        theta_ref_last = 0.0
         for i in range(self.mpc.prediction_horizon + 1):
             t_ref = current_time + i * self.dt
             x_ref, y_ref, vx_ref, vy_ref = self.path_interp.get_reference(t_ref)
-            theta_ref = self.path_interp.get_reference_heading(t_ref)
-            v_ref = np.sqrt(vx_ref**2 + vy_ref**2)
+            v_ref = np.sqrt(vx_ref ** 2 + vy_ref ** 2)
+            v_threshold = 0.1  # 速度阈值
+            if v_ref >= v_threshold:
+                theta_ref = self.path_interp.get_reference_heading(t_ref)
+            else:
+                print("速度接近0，采用上一个时间步的航向角")
+                theta_ref = theta_ref_last
+            theta_ref_last = theta_ref
             ref_trajectory[i] = [theta_ref, v_ref]
         
         # 求解MPC
@@ -436,7 +514,8 @@ class PathTracker:
             state, control = self.step(current_time)
             
             if i % 100 == 0:  # 每1秒打印一次进度
-                print(f"时间: {current_time:.2f}s, 位置: ({state[0]:.2f}, {state[1]:.2f}), 速度: {state[3]:.2f}m/s")
+                print(f"时间: {current_time:.2f}s, 位置: ({state[0]:.2f}, {state[1]:.2f}), "
+                      f"航向角: {(state[2] * 180 / np.pi):.2f}°, 速度: {state[3]:.2f}m/s, 方向盘转角: {np.degrees(control[1]):.2f}°")
         
         end_time = time.time()
         print(f"仿真完成! 用时: {end_time - start_time:.2f}s")
@@ -534,7 +613,7 @@ class PathTracker:
                        facecolor='white', edgecolor='none')
             print(f"结果图已保存到: {save_path}")
         
-        plt.show()
+        # plt.show()
 
 
 def create_test_path() -> np.ndarray:

@@ -1,0 +1,2 @@
+训练数据
+trajectory_sce1_cond.npy 为修改起始条件、终止条件后的训练数据
