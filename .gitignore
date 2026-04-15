@@ -1,4 +1,9 @@
 /MPC/pics/
 /MPC/gifs/
 /training/gif/
-/results/ModelValidation/surface
+/training/loss/
+/results/
+/SUT_Testing/DefensiveData_Unprocessed/
+/SUT_Testing/tools/DrivableArea_to_python/
+/SUT_Testing/tools/results/
+/SUT_Testing/tools/max_dnda_summary.csv

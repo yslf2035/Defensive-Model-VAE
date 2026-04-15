@@ -2,6 +2,7 @@
 空间分布相关的函数：坐标提取、RMSE计算、colorbar范围计算和空间分布绘制
 """
 
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -376,7 +377,7 @@ def _get_grid_edges(model_name, grid_size=1.0):
         y_edges = np.arange(-8, 6, grid_size)
     elif "sce3" in model_name:
         x_edges = np.arange(148, 158, grid_size)
-        y_edges = np.arange(-80, 0, grid_size)
+        y_edges = np.arange(-80, 22, grid_size)
     else:
         x_edges = np.arange(0, 20, grid_size)
         y_edges = np.arange(-20, 100, grid_size)
@@ -567,6 +568,10 @@ def plot_spatial_distribution_new(trajectories, title, model_name, save_path=Non
         xlim = (-200, -120)
         ylim = (-8, 6)
         base_size = 20
+    elif "sce3" in model_name:
+        xlim = (148, 158)
+        ylim = (-80, 22)
+        base_size = 40
     elif "sce4" in model_name:
         xlim = (-45, 65)
         ylim = (-10, 100)
@@ -662,9 +667,9 @@ def plot_spatial_distribution_new(trajectories, title, model_name, save_path=Non
     total_trajectories = len(trajectories)
     max_count = np.max(H)
     stats_text = f'Total trajectories: {total_trajectories}\nMax trajectories per grid: {int(max_count)}'
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-            fontsize=14, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    # ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+    #         fontsize=14, verticalalignment='top',
+    #         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
     plt.tight_layout()
     
@@ -1016,20 +1021,6 @@ def plot_space_time_velocity_model(loaded_trajectories, model_name, axis="x",
         plot_kwargs['vmax'] = vmax
     surf = ax_surf.plot_surface(coord_grid, time_grid, v_surface, **plot_kwargs)
     
-    # 根据曲面绘制两条边际最高（最大值）投影曲线，投影到 xOz（坐标-速度）和 yOz（时间-速度）平面
-    coord_centers_1d = coord_grid[0, :]
-    time_centers_1d = time_grid[:, 0]
-    max_v_over_time = v_surface.max(axis=0)   # 对时间取最大 → 坐标-速度
-    max_v_over_coord = v_surface.max(axis=1)  # 对坐标取最大 → 时间-速度
-    time_max = time_grid.max()
-    coord_min = coord_grid.min()
-    # xOz 平面上的边际最高曲线（放在 y=time_max 的背面）
-    ax_surf.plot(coord_centers_1d, np.full_like(coord_centers_1d, time_max), max_v_over_time,
-                 color='#C41E3A', linewidth=2, label='Max (coord-vel)')
-    # yOz 平面上的边际最高曲线（放在 x=coord_min 的侧面）
-    ax_surf.plot(np.full_like(time_centers_1d, coord_min), time_centers_1d, max_v_over_coord,
-                 color='#E67E22', linewidth=2, label='Max (time-vel)')
-    
     # colorbar放在右侧
     cbar = fig_surf.colorbar(surf, ax=ax_surf, shrink=0.5, aspect=10, pad=0.1)
     cbar.set_label('Velocity (m/s)', fontsize=14)
@@ -1163,18 +1154,6 @@ def plot_space_time_velocity_human(human_trajectories, model_name, axis="x",
         plot_kwargs['vmax'] = vmax
     surf = ax_surf.plot_surface(coord_grid, time_grid, v_surface, **plot_kwargs)
     
-    # 根据曲面绘制两条边际最高（最大值）投影曲线，投影到 xOz（坐标-速度）和 yOz（时间-速度）平面
-    coord_centers_1d = coord_grid[0, :]
-    time_centers_1d = time_grid[:, 0]
-    max_v_over_time = v_surface.max(axis=0)
-    max_v_over_coord = v_surface.max(axis=1)
-    time_max = time_grid.max()
-    coord_min = coord_grid.min()
-    ax_surf.plot(coord_centers_1d, np.full_like(coord_centers_1d, time_max), max_v_over_time,
-                 color='#C41E3A', linewidth=2, label='Max (coord-vel)')
-    ax_surf.plot(np.full_like(time_centers_1d, coord_min), time_centers_1d, max_v_over_coord,
-                 color='#E67E22', linewidth=2, label='Max (time-vel)')
-    
     # colorbar放在右侧
     cbar = fig_surf.colorbar(surf, ax=ax_surf, shrink=0.5, aspect=10, pad=0.1)
     cbar.set_label('Velocity (m/s)', fontsize=14)
@@ -1216,6 +1195,346 @@ def plot_space_time_velocity_human(human_trajectories, model_name, axis="x",
     # plt.show()
     
     return v_surface  # 返回速度曲面
+
+
+def plot_spatiotemporal_trajectories(human_trajectories, loaded_trajectories, model_name,
+                                     save_dir="results/ModelValidation/SpatialTemporal", elev=20, azim=45):
+    """
+    根据人类轨迹和模型轨迹绘制三维时间-空间轨迹图。
+    底面为 x 轴坐标和 y 轴坐标，z 轴为时间轴；人类与模型各一张图，每张图上为时空轨迹簇。
+
+    Args:
+        human_trajectories: 人类轨迹列表，每个元素为 [N, 3] 的数组 [x, y, t]
+        loaded_trajectories: 模型轨迹列表，每个元素为 [N, 4] 的状态序列 [x, y, theta, v]
+        model_name: 模型名称，用于推断模型轨迹的时间步长
+        save_dir: 保存目录，默认为 "results/ModelValidation/SpatialTemporal"
+        elev: 三维图的仰角角度（默认20度）
+        azim: 三维图的方位角角度（默认45度）
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    model_parts = model_name.split('_')
+    sce_name = model_parts[2]
+    save_name = "spatio-temporal_trajectories_" + sce_name + ".png"
+
+    # 计算人类轨迹范围
+    human_limits = calculate_limits(human_trajectories, is_human=True)
+
+    # 计算模型轨迹范围
+    model_limits = calculate_limits(loaded_trajectories, is_human=False, model_name=model_name)
+
+    # 坐标轴范围
+    if "sce1" in model_name:
+        x_min, x_max = -200, -190
+        y_min = np.floor(min(human_limits[2], model_limits[2]))
+        y_max = np.ceil(max(human_limits[3], model_limits[3]))
+    elif "sce3" in model_name:
+        x_min, x_max = 150, 160
+        y_min = np.floor(min(human_limits[2], model_limits[2]))
+        y_max = np.ceil(max(human_limits[3], model_limits[3]))
+    else:
+        x_min = min(human_limits[0], model_limits[0])
+        x_max = max(human_limits[1], model_limits[1])
+        y_min = min(human_limits[2], model_limits[2])
+        y_max = max(human_limits[3], model_limits[3])
+    z_min = min(human_limits[4], model_limits[4])
+    z_max = max(human_limits[5], model_limits[5])
+
+    # ----- 人类轨迹：三维时空图 (x, y, time) -----
+    if len(human_trajectories) > 0:
+        fig_h = plt.figure(figsize=(10, 10))
+        ax_h = fig_h.add_subplot(111, projection='3d')
+
+        for traj in human_trajectories:
+            if traj.shape[0] < 2 or traj.shape[1] < 3:
+                continue
+            x = traj[:, 0]
+            y = traj[:, 1]
+            t = traj[:, 2]
+            ax_h.plot(x, y, t, alpha=0.6, linewidth=0.8)
+
+        ax_h.set_xlabel('Y (m)', fontsize=14)
+        ax_h.set_ylabel('X (m)', fontsize=14)
+        ax_h.set_zlabel('Time (s)', fontsize=14)
+        ax_h.set_title('Human Spatiotemporal Trajectories', fontsize=16)
+
+        # 设置统一的坐标轴范围
+        ax_h.set_xlim(x_min, x_max)
+        ax_h.set_ylim(y_min, y_max)
+        ax_h.set_zlim(z_min, z_max)
+        # 底面比例：X 轴更窄，Y 轴更长
+        ax_h.set_box_aspect((0.6, 1.4, 1))
+
+        # 重新设置坐标轴刻度
+        if "sce1" in model_name or "sce3" in model_name:
+            # 动态计算x轴刻度：尽量显示整数或一位小数
+            x_ticks, x_tick_labels = generate_ticks(x_min, x_max, model_name, axis="x")
+            ax_h.set_xticks(x_ticks)
+            ax_h.set_xticklabels(x_tick_labels)
+
+            # 动态计算y轴刻度：尽量显示整数或一位小数
+            y_ticks, y_tick_labels = generate_ticks(y_min, y_max, model_name, axis="y")
+            ax_h.set_yticks(y_ticks)
+            ax_h.set_yticklabels(y_tick_labels)
+
+        # 设置视角
+        ax_h.view_init(elev=elev, azim=azim)
+
+        ax_h.xaxis.pane.fill = False
+        ax_h.yaxis.pane.fill = False
+        ax_h.zaxis.pane.fill = False
+        ax_h.grid(True, color='gray', linestyle='-', linewidth=0.5)
+
+        if "sce1" not in model_name:
+            ax_h.invert_xaxis()
+
+        plt.tight_layout()
+        path_human = os.path.join(save_dir, "human_" + save_name)
+        plt.savefig(path_human, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+        plt.close(fig_h)
+        print(f"Human spatiotemporal trajectories plot saved to: {path_human}")
+
+    # ----- 模型轨迹：三维时空图 (x, y, time) -----
+    if len(loaded_trajectories) > 0:
+        dt = _get_model_time_step(model_name)
+        fig_m = plt.figure(figsize=(10, 10))
+        ax_m = fig_m.add_subplot(111, projection='3d')
+
+        for traj in loaded_trajectories:
+            if traj.shape[0] < 2 or traj.shape[1] < 4:
+                continue
+            n = traj.shape[0]
+            x = traj[:, 0]
+            y = traj[:, 1]
+            t = np.arange(n) * dt
+            ax_m.plot(x, y, t, alpha=0.6, linewidth=0.8)
+
+        ax_m.set_xlabel('Y (m)', fontsize=14)
+        ax_m.set_ylabel('X (m)', fontsize=14)
+        ax_m.set_zlabel('Time (s)', fontsize=14)
+        ax_m.set_title('Model Spatiotemporal Trajectories', fontsize=16)
+
+        # 设置统一的坐标轴范围
+        ax_m.set_xlim(x_min, x_max)
+        ax_m.set_ylim(y_min, y_max)
+        ax_m.set_zlim(z_min, z_max)
+        # 底面比例：X 轴更窄，Y 轴更长
+        ax_m.set_box_aspect((0.6, 1.4, 1))
+
+        # 重新设置坐标轴刻度
+        if "sce1" in model_name or "sce3" in model_name:
+            # 动态计算x轴刻度：尽量显示整数或一位小数
+            x_ticks, x_tick_labels = generate_ticks(x_min, x_max, model_name, axis="x")
+            ax_m.set_xticks(x_ticks)
+            ax_m.set_xticklabels(x_tick_labels)
+
+            # 动态计算y轴刻度：尽量显示整数或一位小数
+            y_ticks, y_tick_labels = generate_ticks(y_min, y_max, model_name, axis="y")
+            ax_m.set_yticks(y_ticks)
+            ax_m.set_yticklabels(y_tick_labels)
+
+        # 设置视角
+        ax_m.view_init(elev=elev, azim=azim)
+
+        ax_m.xaxis.pane.fill = False
+        ax_m.yaxis.pane.fill = False
+        ax_m.zaxis.pane.fill = False
+        ax_m.grid(True, color='gray', linestyle='-', linewidth=0.5)
+
+        if "sce1" not in model_name:
+            ax_m.invert_xaxis()
+
+        plt.tight_layout()
+        path_model = os.path.join(save_dir, "model_" + save_name)
+        plt.savefig(path_model, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+        plt.close(fig_m)
+        print(f"Model spatiotemporal trajectories plot saved to: {path_model}")
+
+    # 绘制完成后，按时间平面计算人类轨迹簇与模型轨迹簇的 RMSE
+    if len(human_trajectories) > 0 and len(loaded_trajectories) > 0:
+        compute_spatiotemporal_plane_rmse(human_trajectories, loaded_trajectories, model_name, time_interval=0.5)
+
+
+def compute_spatiotemporal_plane_rmse(human_trajectories, loaded_trajectories, model_name, time_interval=5.0):
+    """
+    每 time_interval 秒截取一个时间平面，在各平面上比较人类轨迹簇与模型轨迹簇的空间分布，
+    计算平面与平面之间（各时间切片内）所有点坐标差异的均方根误差。
+
+    实现方式：在每个时间切片内，分别求人类点与模型点的质心 (mean_x, mean_y)，
+    以两质心间的欧氏距离作为该切片的误差，再对所有切片求 RMSE。
+
+    Args:
+        human_trajectories: 人类轨迹列表，每个元素为 [N, 3] 的数组 [x, y, t]
+        loaded_trajectories: 模型轨迹列表，每个元素为 [N, 4] 的状态序列 [x, y, theta, v]
+        model_name: 模型名称，用于推断模型轨迹的时间步长
+        time_interval: 时间切片间隔（秒），默认 5.0
+
+    Returns:
+        rmse: 各时间平面上的质心误差的 RMSE（标量）
+        slice_errors: 各时间切片的误差列表（可选用于分析）
+    """
+    dt = _get_model_time_step(model_name)
+
+    # 收集人类轨迹所有 (x, y, t) 点
+    human_points = []
+    for traj in human_trajectories:
+        if traj.shape[0] < 1 or traj.shape[1] < 3:
+            continue
+        for i in range(traj.shape[0]):
+            human_points.append([traj[i, 0], traj[i, 1], traj[i, 2]])
+    human_points = np.array(human_points) if human_points else np.empty((0, 3))
+
+    # 收集模型轨迹所有 (x, y, t) 点
+    model_points = []
+    for traj in loaded_trajectories:
+        if traj.shape[0] < 1 or traj.shape[1] < 4:
+            continue
+        n = traj.shape[0]
+        for i in range(n):
+            t = i * dt
+            model_points.append([traj[i, 0], traj[i, 1], t])
+    model_points = np.array(model_points) if model_points else np.empty((0, 3))
+
+    if len(human_points) == 0 or len(model_points) == 0:
+        print("Spatiotemporal plane RMSE: insufficient points (human or model empty), skip.")
+        return np.nan, []
+
+    t_min = min(human_points[:, 2].min(), model_points[:, 2].min())
+    t_max = max(human_points[:, 2].max(), model_points[:, 2].max())
+    edges = np.arange(t_min, t_max + 1e-9, time_interval)
+    if len(edges) < 2:
+        print("Spatiotemporal plane RMSE: time range < one interval, skip.")
+        return np.nan, []
+
+    slice_errors = []
+    for i in range(len(edges) - 1):
+        t_low, t_high = edges[i], edges[i + 1]
+        mask_h = (human_points[:, 2] >= t_low) & (human_points[:, 2] < t_high)
+        mask_m = (model_points[:, 2] >= t_low) & (model_points[:, 2] < t_high)
+        pts_h = human_points[mask_h][:, :2]
+        pts_m = model_points[mask_m][:, :2]
+        if pts_h.shape[0] == 0 or pts_m.shape[0] == 0:
+            continue
+        cen_h = np.mean(pts_h, axis=0)
+        cen_m = np.mean(pts_m, axis=0)
+        err = np.sqrt(np.sum((cen_h - cen_m) ** 2))
+        slice_errors.append(err)
+
+    if len(slice_errors) == 0:
+        print("Spatiotemporal plane RMSE: no slice with both human and model points, skip.")
+        return np.nan, []
+
+    slice_errors = np.array(slice_errors)
+    rmse = np.sqrt(np.mean(slice_errors ** 2))
+    print(f"Spatiotemporal plane RMSE (interval={time_interval}s, {len(slice_errors)} slices): {rmse:.6f} m")
+    return rmse, slice_errors.tolist()
+
+
+def calculate_limits(trajectories_list, is_human=True, model_name=None):
+    """
+    计算所有轨迹的x、y、z坐标范围
+    """
+    x_min, x_max = float('inf'), -float('inf')
+    y_min, y_max = float('inf'), -float('inf')
+    z_min, z_max = float('inf'), -float('inf')
+
+    for traj in trajectories_list:
+        if traj.shape[0] < 2:
+            continue
+
+        x = traj[:, 0]
+        y = traj[:, 1]
+
+        if is_human:
+            z = traj[:, 2]  # 人类轨迹的第三列是时间
+        else:
+            n = traj.shape[0]
+            dt = _get_model_time_step(model_name)
+            z = np.arange(n) * dt  # 模型轨迹需要计算时间
+
+        x_min, x_max = min(x_min, x.min()), max(x_max, x.max())
+        y_min, y_max = min(y_min, y.min()), max(y_max, y.max())
+        z_min, z_max = min(z_min, z.min()), max(z_max, z.max())
+
+    # 如果没有轨迹数据，返回默认值
+    if x_min == float('inf'):
+        return (0, 1, 0, 1, 0, 1)
+
+    return x_min, x_max, y_min, y_max, z_min, z_max
+
+
+def generate_ticks(min_val, max_val, model_name, axis="x", max_ticks=8):
+    """
+    生成适合的刻度位置，尽量显示整数或一位小数
+    """
+    # 计算范围
+    range_val = max_val - min_val
+
+    # 尝试不同的刻度间隔，优先使用整数间隔，然后是一位小数间隔
+    possible_intervals = []
+
+    # 生成可能的间隔
+    for multiplier in [0.1, 0.2, 0.5, 1, 2, 5]:
+        for power in range(-2, 3):
+            interval = multiplier * (10 ** power)
+            if interval > 0:
+                possible_intervals.append(interval)
+    # 去重并排序
+    possible_intervals = sorted(set(possible_intervals))
+
+    best_interval = None
+    best_ticks = None
+    for interval in possible_intervals:
+        # 计算在这个间隔下需要多少个刻度
+        num_ticks = range_val / interval
+
+        # 如果刻度数量在合理范围内，并且能覆盖整个范围
+        if 2 <= num_ticks <= max_ticks:
+            # 生成刻度位置
+            ticks = np.arange(max_val - interval * np.ceil(num_ticks), max_val + 0.001, interval)
+
+            # 确保刻度在范围内
+            ticks = ticks[(ticks >= min_val) & (ticks <= max_val)]
+
+            if len(ticks) >= 2 and (best_interval is None or interval < best_interval):
+                best_interval = interval
+                best_ticks = ticks
+
+        # 如果找到了合适的间隔
+    if best_interval is not None:
+        # 生成刻度标签，从0开始
+        tick_labels = []
+        for tick in best_ticks:
+            if axis == "y" and ("sce3" in model_name or "sce4" in model_name):
+                # 计算相对于min_val的值
+                rel_value = range_val - (tick - min_val)
+            else:
+                rel_value = tick - min_val
+
+            # 根据值的大小决定显示格式
+            if abs(rel_value) < 0.001:  # 接近0，显示0
+                tick_labels.append("0")
+            elif best_interval >= 1:  # 间隔为整数，显示整数
+                tick_labels.append(str(int(round(rel_value))))
+            else:  # 间隔为小数，显示一位小数
+                tick_labels.append(str(round(rel_value, 1)))
+
+        return best_ticks, tick_labels
+    else:
+        # 如果找不到合适的间隔，使用5个等间距刻度
+        ticks = np.linspace(min_val, max_val, 5)
+        tick_labels = []
+        for tick in ticks:
+            rel_value = tick - min_val
+            if abs(rel_value) < 0.001:
+                tick_labels.append("0")
+            else:
+                # 根据范围决定显示精度
+                if range_val < 1:
+                    tick_labels.append(str(round(rel_value, 1)))
+                else:
+                    tick_labels.append(str(int(round(rel_value))))
+
+        return ticks, tick_labels
 
 
 def calculate_surface_rmse(model_v_surface, human_v_surface, include_zero_velocity=True):

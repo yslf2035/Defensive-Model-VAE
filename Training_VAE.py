@@ -1,28 +1,95 @@
 """
 条件变分自编码器(Conditional VAE)轨迹生成模型
 
+================================================================================
+一、CVAE 原理（数学表达）
+================================================================================
+
+记号约定：
+  x  : 观测轨迹（本实现中为相对起点偏移）x ∈ R^{T×3}，每行 [t, dx, dy]
+  c  : 条件（起点坐标）c = (x_start, y_start) ∈ R^2
+  z  : 潜在向量 z ∈ R^d（d = latent_dim）
+
+1) 生成模型（解码器视角）
+   - 先验：        z ~ N(0, I)
+   - 条件生成：    x ~ p_θ(x | z, c)   （解码器用 z 和 c 生成 x）
+   - 即：给定条件 c，从 N(0,I) 采样 z，再由解码器输出 x̂ = Decode(z, c)。
+
+2) 推断模型（编码器视角）
+   - 近似后验：    z ~ q_φ(z | x, c) = N(z; μ_φ(x,c), diag(σ²_φ(x,c)))
+   - 编码器输入 (x, c)，输出 μ, log σ²，重参数化采样：
+     z = μ + σ ⊙ ε,   ε ~ N(0, I)。
+
+3) 训练目标（最大化证据下界 ELBO，等价于最小化负 ELBO）
+   L = E_{q_φ(z|x,c)} [ -log p_θ(x|z,c) ] + D_KL( q_φ(z|x,c) || p(z) )
+     = L_recon + L_KLD
+
+   本实现中：
+   - L_recon：用 MSE( Decode(z,c), x ) 近似 -log p_θ(x|z,c)（高斯观测）
+   - L_KLD：  -0.5 * mean( 1 + log σ² - μ² - σ² )，闭式 KL(N(μ,σ²)||N(0,1))
+   - 另加两项正则：
+     L_start：相对坐标系下起点 (dx_0, dy_0) 的约束（接近 0）
+     L_time： 时间从 0 开始且单调递增
+
+   总损失（标量）：
+   L_total = λ_recon·L_recon + λ_kld·L_KLD + λ_start·L_start + λ_time·L_time
+
+4) 生成过程（推理时）
+   - 给定任意起点 c = (x_start, y_start)：
+     (1) 采样 z ~ N(0, I)
+     (2) 条件编码 h_c = ConditionEncoder(c)
+     (3) 相对轨迹 x̂_rel = Decode(z, h_c)，形状 [T, 3]，每行 [t, dx, dy]
+     (4) 全局轨迹：x_glob(t) = x_start + dx(t), y_glob(t) = y_start + dy(t)
+
+================================================================================
+二、训练时优化的参数
+================================================================================
+
+以下均为可学习参数（由优化器如 Adam 更新）：
+
+1) condition_encoder（条件编码器）
+   - Linear(2 → hidden_dim) 的权重与偏置
+   - Linear(hidden_dim → hidden_dim) 的权重与偏置
+   - 将 c ∈ R^2 映射为 h_c ∈ R^{hidden_dim}
+
+2) encoder（轨迹编码器，MLP）
+   - Flatten 无参数
+   - 4 个 Linear 层：Flatten(x) ∈ R^{seq_len*dim} → hidden_dim → … → hidden_dim
+   - 每层含权重与偏置
+
+3) fc_mu, fc_logvar（潜在空间映射）
+   - fc_mu:    Linear(hidden_dim + hidden_dim → latent_dim)，输出 μ
+   - fc_logvar: Linear(hidden_dim + hidden_dim → latent_dim)，输出 log σ²
+   - 输入为 [h_traj; h_c] 的拼接
+
+4) decoder（解码器，MLP）
+   - Linear(latent_dim + hidden_dim → hidden_dim)
+   - 若干 Linear(hidden_dim → hidden_dim)
+   - 最后一层 Linear(hidden_dim → seq_len*dim) + Unflatten → (seq_len, dim)
+   - 输出相对轨迹 [t, dx, dy]
+
+汇总：所有上述 Linear 的 weight 和 bias 均在训练中更新，无冻结参数。
+
+================================================================================
+三、数据与实现约定（与原注释一致）
+================================================================================
+
 模型原理：
-1. 编码器：将轨迹数据（包含时间信息）和起点条件编码到潜在空间
-2. 解码器：从潜在空间和条件信息重建轨迹
-3. 变分推断：学习数据的概率分布，支持生成新轨迹
-4. 条件约束：通过起点坐标条件控制生成轨迹的起点
+1. 编码器：将轨迹（相对偏移）与起点条件编码到潜在空间 (μ, log σ²)
+2. 解码器：从 z 与条件生成相对轨迹 [t, dx, dy]
+3. 变分推断：学习条件分布，支持给定起点 c 生成新轨迹
+4. 条件约束：通过起点 c 控制生成轨迹的“锚点”，相对轨迹学 (dx, dy)
 
 训练目标：
-- 重构损失：确保重建轨迹与原始轨迹（在相对坐标系下）相似
-- KL散度：正则化潜在空间分布
-- 起点损失：约束生成轨迹在相对坐标系下的起点为(0,0)
+- 重构损失：重建相对轨迹与输入相对轨迹相似
+- KL 散度：正则化潜在空间
+- 起点损失：相对坐标系下起点接近 (0,0)
+- 时间损失：时间从 0 起且递增
 
 数据格式：
 - 原始数据：(batch_size, seq_len, 3) - [时间t, x坐标, y坐标]
-- 条件：起点坐标 (x, y) - 2维
-
-本实现中的实际训练形式：
-- 时间t 保持为绝对时间，不做平移
-- 位置部分改为相对于起点的偏移量：
-  dx = x - x_start, dy = y - y_start
-- 模型学习的是随时间变化的偏移轨迹 [t, dx, dy]
-- 生成时：先根据给定起点 (x_start, y_start) 和随机潜在向量生成 [t, dx, dy]，
-  再通过 x = x_start + dx, y = y_start + dy 还原到全局坐标系
+- 条件：起点坐标 (x_start, y_start) ∈ R^2
+- 训练时内部转为相对偏移：dx = x - x_start, dy = y - y_start，时间 t 不变
 """
 
 import numpy as np
@@ -159,12 +226,14 @@ class ConditionalTrajectoryVAE(nn.Module):
         return recon_x, mu, logvar, condition
 
 # ===================== 条件VAE损失函数 =====================
-def conditional_vae_loss(recon_x, x, mu, logvar, condition, alpha=1.0, time_weight=0.1):
+def conditional_vae_loss(recon_x, x, mu, logvar, condition, recon_weight=0.1, kld_weight=0.1, start_weight=1.0, time_weight=0.5):
     """
     条件VAE损失函数，包含起点约束和时间约束
     Args:
         recon_x, x: 此处的x为“相对起点偏移轨迹”，格式为 [t, dx, dy]
-        alpha: 起点约束的权重，控制起点约束的强度
+        recon_weight: 重构损失的权重
+        kld_weight: KL散度的权重
+        start_weight: 起点约束的权重，控制起点约束的强度
         time_weight: 时间约束的权重，控制时间约束的强度
     """
     # 重构损失：确保重建轨迹与原始轨迹相似
@@ -175,7 +244,7 @@ def conditional_vae_loss(recon_x, x, mu, logvar, condition, alpha=1.0, time_weig
     
     # 起点约束损失：确保生成轨迹的起点符合条件
     start_loss = 0
-    if alpha > 0:
+    if start_weight > 0:
         # 此时x和recon_x都是相对坐标，理论上起点应为(0,0)，
         # 该约束鼓励模型在相对坐标系中保持起点为零
         real_start = x[:, 0, 1:3]      # 真实相对起点(dx, dy)，应接近(0,0)
@@ -195,7 +264,7 @@ def conditional_vae_loss(recon_x, x, mu, logvar, condition, alpha=1.0, time_weig
         time_loss = time_start_loss + time_increasing_loss
     
     # 总损失：重构损失 + KL散度 + 起点约束 + 时间约束
-    total_loss = recon_loss + kld + alpha * start_loss + time_weight * time_loss
+    total_loss = recon_weight * recon_loss + kld_weight * kld + start_weight * start_loss + time_weight * time_loss
     return total_loss, recon_loss, kld, start_loss, time_loss
 
 # ===================== 训练主程序 =====================
@@ -214,8 +283,8 @@ if __name__ == "__main__":
     model_name = data_path.split('/')[-1]
     model_name = model_name.split('.')[0]
     model_name = model_name.replace("trajectory_", "", 1)
-    model_save_path = 'training/models/vae_offset_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '.pth'  # 模型保存路径
-    loss_save_path = 'training/loss/vae_offset_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '.png'
+    model_save_path = 'training/models/vae_offset_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '_loss2.pth'  # 模型保存路径
+    loss_save_path = 'training/loss/vae_offset_' + model_name + '_ld' + str(latent_dim) + '_epoch' + str(epochs) + '_loss2.png'
 
     # ====== 起点终点控制参数 ======
     # 训练时：始终使用真实数据的起点坐标（推荐）
@@ -226,12 +295,15 @@ if __name__ == "__main__":
     
     # 自定义起点设置（仅在use_training_start_end=False时生效）
     custom_start_end = [(155.0, -15.0), (155.0, 40.0)]  # 自定义起点坐标，格式为[(start_x, start_y), (end_x, end_y)]
-    
+
+    # 重构权重（训练时使用）
+    recon_weight = 0.1
+    # KL散度权重（训练时使用）
+    kld_weight = 0.1
     # 起点约束权重（训练时使用）
-    start_end_weight = 2.0  # 控制起点约束的强度，值越大约束越强
-    
+    start_weight = 1.0  # 控制起点约束的强度，值越大约束越强
     # 时间约束权重（训练时使用）
-    time_weight = 2.0  # 控制时间约束的强度，确保时间信息合理
+    time_weight = 1.0  # 控制时间约束的强度，确保时间信息合理
 
     # ====== 可视化控制参数 ======
     # 控制绘制训练数据的轨迹范围
@@ -283,7 +355,7 @@ if __name__ == "__main__":
                 # 注意：此处的x使用的是相对坐标 batch_rel
                 loss, recon_loss, kld, start_loss, time_loss = conditional_vae_loss(
                     recon_batch, batch_rel, mu, logvar, condition,
-                    alpha=start_end_weight, time_weight=time_weight
+                    recon_weight=recon_weight, kld_weight=kld_weight, start_weight=start_weight, time_weight=time_weight
                 )
                 
                 # 反向传播和参数更新
@@ -307,10 +379,15 @@ if __name__ == "__main__":
             loss_history['start_loss'].append(total_start / len(dataset))
             loss_history['time_loss'].append(total_time / len(dataset))
 
+        # loss_history_1 = {key: values[1:] for key, values in loss_history.items()}
+        # epochs_1 = epochs - 1
+
+        loss_history['recon_loss'] = [x * recon_weight for x in loss_history['recon_loss']]
+        loss_history['kld_loss'] = [x * kld_weight for x in loss_history['kld_loss']]
+        loss_history['start_loss'] = [x * start_weight for x in loss_history['start_loss']]
+        loss_history['time_loss'] = [x * time_weight for x in loss_history['time_loss']]
         # 绘制损失曲线
-        loss_history_1 = {key: values[1:] for key, values in loss_history.items()}
-        epochs_1 = epochs - 1
-        plot_losses(loss_history_1, epochs_1, loss_save_path)
+        plot_losses(loss_history, epochs, loss_save_path)
 
         # 保存训练好的模型
         torch.save(model.state_dict(), model_save_path)

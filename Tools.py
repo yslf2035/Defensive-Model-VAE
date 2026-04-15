@@ -709,8 +709,8 @@ def plot_losses(loss_history, epochs, save_path="training/loss/loss.png"):
     labels = {
         'total_loss':   'Total Loss',
         'recon_loss':   'Reconstruction Loss',
-        'kld_loss':     'KLD Loss',
-        'start_loss':   'Start Loss',
+        'kld_loss':     'KL Divergence Loss',
+        'start_loss':   'Starting Point Loss',
         'time_loss':    'Time Loss',
     }
 
@@ -734,16 +734,41 @@ def plot_losses(loss_history, epochs, save_path="training/loss/loss.png"):
     ax2.set_ylabel('Loss')
     ax2.set_title('Component Losses', fontweight='bold')
     ax2.grid(True, linestyle='--', alpha=0.7)
-    ax2.legend(loc='upper right', bbox_to_anchor=(0.98, 0.98))  # 右上角内嵌，避免裁剪
+    # ax2.legend(loc='upper right', bbox_to_anchor=(0.98, 0.98))  # 右上角内嵌，避免裁剪
 
-    # 统一主标题（可选，注释掉则无）
-    # fig.suptitle('Training Loss Breakdown', fontweight='bold', fontsize=18)
+    plt.show()
 
     # 保存 & 清理
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
 
     print(f"Loss plots saved to: {save_path}")
+
+    # ===== 将 loss_history 保存为 CSV =====
+    try:
+        import csv
+
+        csv_path = os.path.splitext(save_path)[0] + ".csv"
+
+        # 确保目录存在
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+
+        # 假设所有列表长度一致，已在前面校验
+        keys = list(loss_history.keys())
+        num_rows = len(next(iter(loss_history.values())))
+
+        with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            # 写表头：每个 key 一列
+            writer.writerow(keys)
+            # 逐行写入每个 epoch 的各项 loss
+            for i in range(num_rows):
+                row = [loss_history[k][i] for k in keys]
+                writer.writerow(row)
+
+        print(f"Loss history saved to CSV: {csv_path}")
+    except Exception as e:
+        print(f"Failed to save loss history CSV: {e}")
 
 
 # ===================== 样条曲线函数 =====================

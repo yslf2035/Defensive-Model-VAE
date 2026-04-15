@@ -1,0 +1,16 @@
+IDM_XXX_1.csv  # 原动作触发条件，目标速度60km/h
+sce1:
+TCP_XXX_1.csv  # 原动作触发条件
+TCP_XXX_2.csv  # 距离触发条件，但是距离=自车车速*固定时距 5.0s
+TCP_XXX_3.csv  # 原动作触发条件，自行车速度修改为1m/s
+TCP_XXX_4.csv  # 同2
+sce2:
+TCP_XXX_1.csv  # 修改速度，前车first_actor_speed=3.5m/s，障碍物车second_actor_speed=0.3，其他车third_actor_speed,fourth_actor_speed=1
+		# 注释掉ChangeDirectionAndRestore，最后添加TimeOut(10)
+TCP_XXX_2.csv  # 基于1，将障碍物车车型替换为前车的车型
+TCP_XXX_3.csv  # 修改天气，修改速度，前车first_actor_speed=3m/s，障碍物车second_actor_speed=0.25，其他同1
+sce3:
+TCP_XXX_1.csv  # 触发距离修改为40，自行车变道行为持续时长修改
+TCP_XXX_2.csv  # 距离触发条件，但是距离=自车车速*固定时距 5.0s
+sce4:
+TCP_XXX_1.csv  # 背景车速度修改为5m/s

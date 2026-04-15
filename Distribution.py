@@ -233,8 +233,14 @@ def load_human_trajectories(csv_files, model_name):
             mask = human_trajectory[:, 0] < 9
         else:
             mask = human_trajectory[:, 1] <= 40
-        first_index = np.argmax(mask) if np.any(mask) else 0
-        human_trajectory_1 = human_trajectory[first_index:]
+        if "sce1" in model_name:
+            filtered_cols_1_2 = human_trajectory[mask][:, [0, 1]]
+            l = len(filtered_cols_1_2)
+            col3_slice = human_trajectory[:l, [2]]
+            human_trajectory_1 = np.hstack((filtered_cols_1_2, col3_slice))
+        else:
+            first_index = np.argmax(mask) if np.any(mask) else 0
+            human_trajectory_1 = human_trajectory[first_index:]
         human_trajectories.append(human_trajectory_1)
     return human_trajectories
 
@@ -386,8 +392,8 @@ def main():
     print("=" * 60)
     
     # 配置参数
-    base_folder = 'DefensiveData/PredictableMovementTown05'
-    model_path = 'training/models/vae_offset_sce3_cond_ld8_epoch3000.pth'
+    base_folder = 'DefensiveData/StaticBlindTown05'
+    model_path = 'training/models/vae_offset_sce1_cond_ld8_epoch3000.pth'
     model_name = os.path.basename(model_path)
     model_name_parts = model_name.split('_')
     seq_len = 10  # seq_len=10
@@ -430,9 +436,9 @@ def main():
 
     # 已保存模型生成轨迹数据npy文件时启用
     csv_folders = [
-        "DefensiveData/PredictableMovementTown05/减速/",
-        "DefensiveData/PredictableMovementTown05/转向/",
-        "DefensiveData/PredictableMovementTown05/减速+转向/"
+        "DefensiveData/StaticBlindTown05/减速/",
+        "DefensiveData/StaticBlindTown05/转向/",
+        "DefensiveData/StaticBlindTown05/减速+转向/"
     ]
     csv_files = []
     # 遍历每个目标文件夹
@@ -458,7 +464,7 @@ def main():
         # 遍历文件夹内所有文件
         for filename in os.listdir(saved_folder):
             # 筛选条件：文件名包含"sceX" + 后缀是.npy
-            if "sce3" in filename and filename.lower().endswith(".npy"):
+            if "sce1" in filename and filename.lower().endswith(".npy"):
                 # 拼接完整路径并统一分隔符为/
                 full_path = os.path.join(saved_folder, filename)
                 full_path = full_path.replace("\\", "/")
@@ -604,62 +610,73 @@ def main():
     #     vmax=vmax_new
     # )
 
-    # ========== 新增：绘制模型/人类轨迹的三维坐标-时间-速度图 ==========
-    print("\n[Step 9] Plotting 3D space-time-velocity figures...")
-    axis = "y"
-    model_stv_lines_path = 'results/ModelValidation/model_space_time_velocity_lines_' + model_name_parts[2] + '.png'
-    model_stv_surface_path = 'results/ModelValidation/model_space_time_velocity_projection_' + model_name_parts[2] + '.png'
-    human_stv_lines_path = 'results/ModelValidation/human_space_time_velocity_lines_' + model_name_parts[2] + '.png'
-    human_stv_surface_path = 'results/ModelValidation/human_space_time_velocity_projection_' + model_name_parts[2] + '.png'
+    # # ========== 新增：绘制模型/人类轨迹的三维坐标-时间-速度图 ==========
+    # print("\n[Step 9] Plotting 3D space-time-velocity figures...")
+    # axis = "y"
+    # model_stv_lines_path = 'results/ModelValidation/model_space_time_velocity_lines_' + model_name_parts[2] + '.png'
+    # model_stv_surface_path = 'results/ModelValidation/model_space_time_velocity_projection_' + model_name_parts[2] + '.png'
+    # human_stv_lines_path = 'results/ModelValidation/human_space_time_velocity_lines_' + model_name_parts[2] + '.png'
+    # human_stv_surface_path = 'results/ModelValidation/human_space_time_velocity_projection_' + model_name_parts[2] + '.png'
+    #
+    # # 准备数据以计算统一的坐标轴范围和速度范围
+    # from Spatial_Distribution import _prepare_model_stv_data, _prepare_human_stv_data, _calculate_unified_axes_ranges, _calculate_max_velocity_from_trajectories
+    #
+    # model_coords_list, model_times_list, model_v_list = _prepare_model_stv_data(loaded_trajectories, model_name, axis=axis)
+    # human_coords_list, human_times_list, human_v_list = _prepare_human_stv_data(human_trajectories, axis=axis)
+    #
+    # # 计算统一的坐标轴范围
+    # coord_range, time_range = _calculate_unified_axes_ranges(
+    #     model_coords_list, model_times_list,
+    #     human_coords_list, human_times_list
+    # )
+    #
+    # # 计算统一的速度范围：vmin=0，vmax从轨迹中获取最大速度
+    # vmin = 0.0
+    # vmax = _calculate_max_velocity_from_trajectories(model_v_list, human_v_list)
+    #
+    # # 绘制模型轨迹
+    # model_v_surface = plot_space_time_velocity_model(
+    #     loaded_trajectories,
+    #     model_name,
+    #     axis=axis,
+    #     save_path_lines=model_stv_lines_path,
+    #     save_path_surface=model_stv_surface_path,
+    #     num_coord_bins=40,
+    #     num_time_bins=40,
+    #     coord_range=coord_range,
+    #     time_range=time_range,
+    #     vmin=vmin,
+    #     vmax=vmax
+    # )
+    #
+    # # 绘制人类轨迹
+    # human_v_surface = plot_space_time_velocity_human(
+    #     human_trajectories,
+    #     model_name,
+    #     axis=axis,
+    #     save_path_lines=human_stv_lines_path,
+    #     save_path_surface=human_stv_surface_path,
+    #     num_coord_bins=40,
+    #     num_time_bins=40,
+    #     coord_range=coord_range,
+    #     time_range=time_range,
+    #     vmin=vmin,
+    #     vmax=vmax
+    # )
+    #
+    # calculate_surface_rmse(model_v_surface, human_v_surface, include_zero_velocity=True)
+    # calculate_surface_rmse(model_v_surface, human_v_surface, include_zero_velocity=False)
 
-    # 准备数据以计算统一的坐标轴范围和速度范围
-    from Spatial_Distribution import _prepare_model_stv_data, _prepare_human_stv_data, _calculate_unified_axes_ranges, _calculate_max_velocity_from_trajectories
-    
-    model_coords_list, model_times_list, model_v_list = _prepare_model_stv_data(loaded_trajectories, model_name, axis=axis)
-    human_coords_list, human_times_list, human_v_list = _prepare_human_stv_data(human_trajectories, axis=axis)
-    
-    # 计算统一的坐标轴范围
-    coord_range, time_range = _calculate_unified_axes_ranges(
-        model_coords_list, model_times_list,
-        human_coords_list, human_times_list
-    )
-    
-    # 计算统一的速度范围：vmin=0，vmax从轨迹中获取最大速度
-    vmin = 0.0
-    vmax = _calculate_max_velocity_from_trajectories(model_v_list, human_v_list)
-    
-    # 绘制模型轨迹
-    model_v_surface = plot_space_time_velocity_model(
-        loaded_trajectories,
-        model_name,
-        axis=axis,
-        save_path_lines=model_stv_lines_path,
-        save_path_surface=model_stv_surface_path,
-        num_coord_bins=40,
-        num_time_bins=40,
-        coord_range=coord_range,
-        time_range=time_range,
-        vmin=vmin,
-        vmax=vmax
-    )
-    
-    # 绘制人类轨迹
-    human_v_surface = plot_space_time_velocity_human(
+    # ========== 绘制模型/人类轨迹的三维时空图 ==========
+    print("\n[Step 10] Plotting 3D spatial-temporal figures...")
+    plot_spatiotemporal_trajectories(
         human_trajectories,
-        model_name,
-        axis=axis,
-        save_path_lines=human_stv_lines_path,
-        save_path_surface=human_stv_surface_path,
-        num_coord_bins=40,
-        num_time_bins=40,
-        coord_range=coord_range,
-        time_range=time_range,
-        vmin=vmin,
-        vmax=vmax
+        loaded_trajectories,
+        model_name=model_name,
+        save_dir="results/ModelValidation/SpatialTemporal",
+        elev=20,
+        azim=-35  # sce1=-35, sce3=145
     )
-
-    calculate_surface_rmse(model_v_surface, human_v_surface, include_zero_velocity=True)
-    calculate_surface_rmse(model_v_surface, human_v_surface, include_zero_velocity=False)
     
     print("\n" + "=" * 60)
     print("Processing completed!")
